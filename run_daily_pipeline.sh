@@ -37,6 +37,18 @@ TRANSLATION_DELAY="${TRANSLATION_DELAY:-1}"
 echo "Step 3: translate up to ${TRANSLATION_LIMIT} lines..." | tee -a "$LOGFILE"
 uv run translate_lines.py --limit "$TRANSLATION_LIMIT" --delay "$TRANSLATION_DELAY" 2>&1 | tee -a "$LOGFILE"
 
+SUMMARY_LIMIT="${SUMMARY_LIMIT:-25}"
+SUMMARY_DELAY="${SUMMARY_DELAY:-0.5}"
+
+echo "Step 3b: summarize up to ${SUMMARY_LIMIT} lines..." | tee -a "$LOGFILE"
+uv run summarize_lines.py --limit "$SUMMARY_LIMIT" --delay "$SUMMARY_DELAY" 2>&1 | tee -a "$LOGFILE"
+
+OVERLAP_METRIC_VERSION="${OVERLAP_METRIC_VERSION:-v1}"
+OVERLAP_MAX_MATCHES="${OVERLAP_MAX_MATCHES:-10}"
+
+echo "Step 3c: compute Stephanos overlaps (${OVERLAP_METRIC_VERSION})..." | tee -a "$LOGFILE"
+uv run compute_overlaps.py --metric-version "$OVERLAP_METRIC_VERSION" --max-matches "$OVERLAP_MAX_MATCHES" 2>&1 | tee -a "$LOGFILE"
+
 echo "Step 4: generate site..." | tee -a "$LOGFILE"
 uv run generate_site.py 2>&1 | tee -a "$LOGFILE"
 

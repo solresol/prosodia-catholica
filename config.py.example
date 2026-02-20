@@ -16,3 +16,11 @@ DEPLOY_PATH = "/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs"
 
 # Site generation
 SITE_TITLE = "Prosodia Catholica (Herodian)"
+
+# Stephanos DB (for overlap analysis)
+# On raksasa, you can usually use the local UNIX socket by leaving host unset/empty.
+STEPHANOS_DB_HOST = ""
+STEPHANOS_DB_PORT = 5432
+STEPHANOS_DB_NAME = "stephanos"
+STEPHANOS_DB_USER = "herodian"
+STEPHANOS_DB_PASSWORD = "CHANGE_ME"

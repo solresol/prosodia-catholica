@@ -31,6 +31,8 @@ Write a script that:
 This repo includes a small PostgreSQL-backed pipeline to:
 - import `HerodianCathPros.txt` (TSV) into `cathpros_lines`
 - translate a few more lines per day with OpenAI (`gpt-5.2` by default)
+- summarize passages into short index labels with OpenAI (`gpt-5-mini` by default)
+- compute overlaps vs Stephanos (Meineke) into `stephanos_overlap_*`
 - generate a static website into `site/`
 - deploy it to `merah:/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs`
 
@@ -49,11 +51,21 @@ This repo includes a small PostgreSQL-backed pipeline to:
 4. Translate a small batch:
    - `uv run translate_lines.py --limit 5`
 
-5. Generate the site:
+5. Summarize a small batch (for the index page):
+   - `uv run summarize_lines.py --limit 25`
+
+6. (Optional) Compute overlaps vs Stephanos (requires DB grants):
+   - `uv run compute_overlaps.py`
+
+7. Generate the site:
    - `uv run generate_site.py`
 
-6. Deploy:
+8. Deploy:
    - `rsync -az --delete site/ merah:/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs/`
+
+The site is generated as:
+- `site/index.html` (index)
+- `site/passages/<ref>.html` (one page per passage)
 
 ### Daily cron (raksasa)
 
@@ -61,3 +73,13 @@ Install the daily pipeline:
 - `./setup_cron.sh`
 
 The cron job runs `./run_daily_pipeline.sh` once per day and writes logs under `logs/`.
+
+## Stephanos DB grants (raksasa)
+
+`compute_overlaps.py` reads the current Meineke source text from the Stephanos DB. Run in `psql -d stephanos`:
+
+```sql
+GRANT CONNECT ON DATABASE stephanos TO herodian;
+GRANT USAGE ON SCHEMA public TO herodian;
+GRANT SELECT ON public.assembled_lemmas, public.lemma_source_text_versions TO herodian;
+```
