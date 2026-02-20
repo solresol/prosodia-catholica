@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+
 cd "$(dirname "$0")"
 
 mkdir -p logs
@@ -39,8 +41,8 @@ echo "Step 4: generate site..." | tee -a "$LOGFILE"
 uv run generate_site.py 2>&1 | tee -a "$LOGFILE"
 
 echo "Step 5: deploy site via rsync..." | tee -a "$LOGFILE"
-DEPLOY_HOST="$(python3 -c 'import config; print(getattr(config, \"DEPLOY_HOST\", \"merah\"))')"
-DEPLOY_PATH="$(python3 -c 'import config; print(getattr(config, \"DEPLOY_PATH\", \"/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs\"))')"
+DEPLOY_HOST="$(python3 -c 'import config; print(getattr(config, "DEPLOY_HOST", "merah"))')"
+DEPLOY_PATH="$(python3 -c 'import config; print(getattr(config, "DEPLOY_PATH", "/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs"))')"
 
 rsync -az --delete site/ "${DEPLOY_HOST}:${DEPLOY_PATH}/" 2>&1 | tee -a "$LOGFILE"
 

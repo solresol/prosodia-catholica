@@ -25,3 +25,39 @@ Write a script that:
 - normalizes Greek for matching (at minimum: ignore accents; optionally ignore common particles),
 - extracts candidate matching phrases for review, and
 - reports overlap statistics (e.g. percent of headwords/entries with candidates).
+
+## Current pipeline (DB → translation → static site)
+
+This repo includes a small PostgreSQL-backed pipeline to:
+- import `HerodianCathPros.txt` (TSV) into `cathpros_lines`
+- translate a few more lines per day with OpenAI (`gpt-5.2` by default)
+- generate a static website into `site/`
+- deploy it to `merah:/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs`
+
+### Setup (udara / raksasa)
+
+1. Create a per-host config:
+   - copy `config.py.example` → `config.py` (gitignored)
+   - fill in DB settings + deploy target + model
+
+2. Ensure an OpenAI API key exists at `~/.openai.key` (or set `OPENAI_API_KEY`).
+
+3. Initialize schema and import TSV:
+   - `uv run init_db.py`
+   - `uv run import_herodian_tsv.py HerodianCathPros.txt`
+
+4. Translate a small batch:
+   - `uv run translate_lines.py --limit 5`
+
+5. Generate the site:
+   - `uv run generate_site.py`
+
+6. Deploy:
+   - `rsync -az --delete site/ merah:/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs/`
+
+### Daily cron (raksasa)
+
+Install the daily pipeline:
+- `./setup_cron.sh`
+
+The cron job runs `./run_daily_pipeline.sh` once per day and writes logs under `logs/`.
