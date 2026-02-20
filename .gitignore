@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Local secrets / per-host configuration
+config.py
+
+# Generated outputs
+site/
+exports/
+logs/
+pipeline.log
+
+# Local copies of source data
+HerodianCathPros.txt
