@@ -24,3 +24,6 @@ STEPHANOS_DB_PORT = 5432
 STEPHANOS_DB_NAME = "stephanos"
 STEPHANOS_DB_USER = "herodian"
 STEPHANOS_DB_PASSWORD = "CHANGE_ME"
+
+# Public Stephanos site (for overlap links)
+STEPHANOS_SITE_BASE_URL = "https://stephanos.symmachus.org"

@@ -24,15 +24,42 @@ def strip_diacritics(text: str) -> str:
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
+def _is_greek_letter(ch: str) -> bool:
+    if not ch or not ch.isalpha():
+        return False
+    o = ord(ch)
+    return (0x0370 <= o <= 0x03FF) or (0x1F00 <= o <= 0x1FFF)
+
+
+def _extend_end_to_include_combining(text: str, end: int) -> int:
+    while 0 <= end < len(text) and unicodedata.combining(text[end]):
+        end += 1
+    return end
+
+
+def normalize_greek_letters_with_map(text: str) -> tuple[str, list[int]]:
+    """
+    Normalize Greek text to base letters (lowercased, diacritics removed, final sigma → sigma),
+    returning (normalized_letters, norm_index_to_original_index).
+    """
+    if not text:
+        return "", []
+    norm_chars: list[str] = []
+    norm_map: list[int] = []
+    for idx, ch in enumerate(text):
+        if not _is_greek_letter(ch):
+            continue
+        base = strip_diacritics(ch).lower().replace("ς", "σ")
+        for base_ch in base:
+            if not _is_greek_letter(base_ch):
+                continue
+            norm_chars.append(base_ch)
+            norm_map.append(idx)
+    return "".join(norm_chars), norm_map
+
+
 def normalize_greek_letters(text: str) -> str:
-    base = strip_diacritics(text).lower().replace("ς", "σ")
-    out = []
-    for ch in base:
-        o = ord(ch)
-        if (0x0370 <= o <= 0x03FF) or (0x1F00 <= o <= 0x1FFF):
-            if ch.isalpha():
-                out.append(ch)
-    return "".join(out)
+    return normalize_greek_letters_with_map(text)[0]
 
 
 def normalize_greek_words(text: str) -> list[str]:
@@ -59,13 +86,26 @@ def word_shingles(words: list[str], k: int) -> set[int]:
     return out
 
 
-def longest_common_block_len(a, b) -> int:
+def longest_common_block(a, b) -> tuple[int, int, int]:
     if not a or not b:
-        return 0
+        return 0, 0, 0
     match = SequenceMatcher(None, a, b, autojunk=False).find_longest_match(
         0, len(a), 0, len(b)
     )
-    return match.size
+    return match.a, match.b, match.size
+
+
+def map_norm_span_to_original(
+    *, text: str, norm_map: list[int], norm_start: int, norm_size: int
+) -> tuple[int | None, int | None]:
+    if norm_size <= 0:
+        return None, None
+    if norm_start < 0 or (norm_start + norm_size - 1) >= len(norm_map):
+        return None, None
+    orig_start = norm_map[norm_start]
+    orig_end_last_letter = norm_map[norm_start + norm_size - 1]
+    orig_end = _extend_end_to_include_combining(text, orig_end_last_letter + 1)
+    return int(orig_start), int(orig_end)
 
 
 @dataclass(frozen=True)
@@ -75,6 +115,7 @@ class StephanosEntry:
     meineke_id: str | None
     text_body: str
     norm_letters: str
+    norm_letters_map: list[int]
     norm_words: list[str]
 
 
@@ -100,7 +141,7 @@ def fetch_stephanos_entries() -> list[StephanosEntry]:
 
     entries: list[StephanosEntry] = []
     for lemma_id, headword, meineke_id, text_body in rows:
-        norm_letters = normalize_greek_letters(text_body)
+        norm_letters, norm_letters_map = normalize_greek_letters_with_map(text_body)
         norm_words = normalize_greek_words(text_body)
         entries.append(
             StephanosEntry(
@@ -109,6 +150,7 @@ def fetch_stephanos_entries() -> list[StephanosEntry]:
                 meineke_id=meineke_id,
                 text_body=text_body,
                 norm_letters=norm_letters,
+                norm_letters_map=norm_letters_map,
                 norm_words=norm_words,
             )
         )
@@ -165,7 +207,7 @@ def compute_best_matches_for_line(
     min_char_lcs: int,
     min_word_lcs: int,
 ) -> list[dict]:
-    line_letters = normalize_greek_letters(line_text)
+    line_letters, line_letters_map = normalize_greek_letters_with_map(line_text)
     line_words = normalize_greek_words(line_text)
 
     line_char_sh = char_shingles(line_letters, char_k)
@@ -196,14 +238,27 @@ def compute_best_matches_for_line(
         if not entry:
             continue
 
-        char_lcs = longest_common_block_len(line_letters, entry.norm_letters)
-        word_lcs = longest_common_block_len(line_words, entry.norm_words)
+        char_a, char_b, char_lcs = longest_common_block(line_letters, entry.norm_letters)
+        _word_a, _word_b, word_lcs = longest_common_block(line_words, entry.norm_words)
 
         if char_lcs < min_char_lcs and word_lcs < min_word_lcs:
             continue
 
         char_ratio = char_lcs / max(1, min(len(line_letters), len(entry.norm_letters)))
         word_ratio = word_lcs / max(1, min(len(line_words), len(entry.norm_words)))
+
+        herodian_char_start, herodian_char_end = map_norm_span_to_original(
+            text=line_text,
+            norm_map=line_letters_map,
+            norm_start=char_a,
+            norm_size=char_lcs,
+        )
+        stephanos_char_start, stephanos_char_end = map_norm_span_to_original(
+            text=entry.text_body,
+            norm_map=entry.norm_letters_map,
+            norm_start=char_b,
+            norm_size=char_lcs,
+        )
 
         scored.append(
             {
@@ -212,6 +267,10 @@ def compute_best_matches_for_line(
                 "stephanos_headword": entry.headword,
                 "char_lcs_len": int(char_lcs),
                 "char_lcs_ratio": float(char_ratio),
+                "herodian_char_start": herodian_char_start,
+                "herodian_char_end": herodian_char_end,
+                "stephanos_char_start": stephanos_char_start,
+                "stephanos_char_end": stephanos_char_end,
                 "word_lcs_len": int(word_lcs),
                 "word_lcs_ratio": float(word_ratio),
                 "shared_char_shingles": int(char_hits.get(lemma_id, 0)),
@@ -300,6 +359,10 @@ def main() -> None:
                                 m["stephanos_headword"],
                                 int(m["char_lcs_len"]),
                                 float(m["char_lcs_ratio"]),
+                                m["herodian_char_start"],
+                                m["herodian_char_end"],
+                                m["stephanos_char_start"],
+                                m["stephanos_char_end"],
                                 int(m["word_lcs_len"]),
                                 float(m["word_lcs_ratio"]),
                                 int(m["shared_char_shingles"]),
@@ -316,7 +379,9 @@ def main() -> None:
                         """
                         INSERT INTO stephanos_overlap_matches
                           (run_id, herodian_line_id, stephanos_lemma_id, stephanos_meineke_id, stephanos_headword,
-                           char_lcs_len, char_lcs_ratio, word_lcs_len, word_lcs_ratio,
+                           char_lcs_len, char_lcs_ratio,
+                           herodian_char_start, herodian_char_end, stephanos_char_start, stephanos_char_end,
+                           word_lcs_len, word_lcs_ratio,
                            shared_char_shingles, shared_word_shingles)
                         VALUES %s
                         """,
@@ -337,4 +402,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

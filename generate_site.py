@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import unicodedata
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
@@ -70,6 +71,44 @@ input[type="search"]{
   color:var(--muted);
   font-size:12px;
 }
+.tag{
+  display:inline-block;
+  padding:2px 10px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  color:var(--muted);
+  font-size:12px;
+  margin-right:6px;
+}
+.tag.ok{border-color:#2c5b3c;background:rgba(44,91,60,.25);color:#c7ffd2;}
+.tag.todo{border-color:#5a3b24;background:rgba(90,59,36,.25);color:#ffd9c2;}
+
+.table-wrap{
+  margin-top:18px;
+  border:1px solid var(--border);
+  border-radius:14px;
+  overflow:hidden;
+  background:rgba(17,26,51,.55);
+}
+table.tbl{width:100%;border-collapse:separate;border-spacing:0;}
+table.tbl thead th{
+  position:sticky; top:0; z-index:1;
+  text-align:left;
+  font-size:12px;
+  letter-spacing:.02em;
+  color:var(--muted);
+  padding:10px 12px;
+  border-bottom:1px solid var(--border);
+  background:rgba(17,26,51,.92);
+}
+table.tbl tbody td{
+  padding:10px 12px;
+  border-bottom:1px solid rgba(36,48,89,.65);
+  vertical-align:top;
+}
+table.tbl tbody tr:hover{background:rgba(17,26,51,.75);}
+table.tbl td.ref a{font-weight:650;}
+table.tbl td.small{white-space:nowrap;}
 .list{margin-top:18px;display:flex;flex-direction:column;gap:10px;}
 .row{
   border:1px solid var(--border);
@@ -99,6 +138,9 @@ input[type="search"]{
   white-space:pre-wrap;
 }
 .pending{color:var(--muted);font-style:italic;}
+.hl{padding:0 2px;border-radius:4px;}
+.hl-h{background:rgba(255,214,10,.22);}
+.hl-s{background:rgba(122,162,255,.22);}
 details{margin-top:10px;}
 details summary{cursor:pointer; color:var(--accent);}
 pre{
@@ -122,6 +164,117 @@ def ref_to_slug(ref: str) -> str:
     return slug or "ref"
 
 
+def _stephanos_base_url(default: str) -> str:
+    try:
+        from config import STEPHANOS_SITE_BASE_URL as CONFIG_STEPHANOS_SITE_BASE_URL
+    except ImportError:
+        CONFIG_STEPHANOS_SITE_BASE_URL = None
+    return (CONFIG_STEPHANOS_SITE_BASE_URL or default).rstrip("/")
+
+
+_GREEK_LETTER_SLUG_BY_CHAR = {
+    "Α": "alpha",
+    "Β": "beta",
+    "Γ": "gamma",
+    "Δ": "delta",
+    "Ε": "epsilon",
+    "Ζ": "zeta",
+    "Η": "eta",
+    "Θ": "theta",
+    "Ι": "iota",
+    "Κ": "kappa",
+    "Λ": "lambda",
+    "Μ": "mu",
+    "Ν": "nu",
+    "Ξ": "xi",
+    "Ο": "omicron",
+    "Π": "pi",
+    "Ρ": "rho",
+    "Σ": "sigma",
+    "Τ": "tau",
+    "Υ": "upsilon",
+    "Φ": "phi",
+    "Χ": "chi",
+    "Ψ": "psi",
+    "Ω": "omega",
+}
+
+
+def _strip_combining(ch: str) -> str:
+    decomposed = unicodedata.normalize("NFD", ch)
+    for c in decomposed:
+        if not unicodedata.combining(c):
+            return c
+    return ch
+
+
+def stephanos_letter_slug(headword: str | None) -> str | None:
+    if not headword:
+        return None
+    for ch in headword:
+        base = _strip_combining(ch).upper()
+        slug = _GREEK_LETTER_SLUG_BY_CHAR.get(base)
+        if slug:
+            return slug
+    return None
+
+
+def stephanos_entry_url(*, base_url: str, lemma_id: int, headword: str | None) -> str:
+    slug = stephanos_letter_slug(headword)
+    if slug:
+        return f"{base_url}/letter_{slug}.html#lemma-{lemma_id}"
+    return f"{base_url}/cgi-bin/review.cgi?id={lemma_id}"
+
+
+def _to_int(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def highlight_html(text: str, *, start, end, cls: str) -> str:
+    start_i = _to_int(start)
+    end_i = _to_int(end)
+    if start_i is None or end_i is None:
+        return escape(text or "")
+    if start_i < 0 or end_i <= start_i or end_i > len(text):
+        return escape(text or "")
+    return (
+        escape(text[:start_i])
+        + f'<span class="hl {cls}">'
+        + escape(text[start_i:end_i])
+        + "</span>"
+        + escape(text[end_i:])
+    )
+
+
+def highlight_snippet_html(
+    text: str, *, start, end, cls: str, context: int = 140
+) -> str:
+    start_i = _to_int(start)
+    end_i = _to_int(end)
+    if start_i is None or end_i is None:
+        return escape(text or "")
+    if start_i < 0 or end_i <= start_i or end_i > len(text):
+        return escape(text or "")
+    left = max(0, start_i - int(context))
+    right = min(len(text), end_i + int(context))
+    prefix = "…" if left > 0 else ""
+    suffix = "…" if right < len(text) else ""
+    return (
+        escape(prefix)
+        + escape(text[left:start_i])
+        + f'<span class="hl {cls}">'
+        + escape(text[start_i:end_i])
+        + "</span>"
+        + escape(text[end_i:right])
+        + escape(suffix)
+    )
+
+
 def render_shell(*, title: str, body_html: str) -> str:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return f"""<!doctype html>
@@ -130,7 +283,7 @@ def render_shell(*, title: str, body_html: str) -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>{escape(title)}</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <div class="wrap">
@@ -149,49 +302,62 @@ def render_index(*, title: str, stats: dict, lines: list[dict], top_overlap_by_l
     percent = (translated / total * 100.0) if total else 0.0
     percent_str = f"{percent:.1f}%"
 
-    items_html = []
+    stephanos_base_url = _stephanos_base_url("https://stephanos.symmachus.org")
+
+    rows_html = []
     for row in lines:
         line_id = row["id"]
         ref = row["ref"]
         slug = ref_to_slug(ref)
         summary = row.get("summary") or ""
-        overlap = top_overlap_by_line.get(line_id)
-        overlap_label = ""
-        if overlap and overlap.get("stephanos_meineke_id"):
-            overlap_label = escape(str(overlap["stephanos_meineke_id"]))
-        overlap_kv_html = (
-            f"<span class='kv'>top overlap: {overlap_label}</span>" if overlap_label else ""
-        )
-        status_bits = []
-        if row.get("english_translation"):
-            status_bits.append("translated")
-        else:
-            status_bits.append("pending translation")
-        if row.get("summary"):
-            status_bits.append("summarized")
-        else:
-            status_bits.append("pending summary")
 
-        items_html.append(
+        status_html = []
+        status_html.append(
+            '<span class="tag ok">translated</span>'
+            if row.get("english_translation")
+            else '<span class="tag todo">needs translation</span>'
+        )
+        status_html.append(
+            '<span class="tag ok">summarized</span>'
+            if row.get("summary")
+            else '<span class="tag todo">needs summary</span>'
+        )
+        status_cell = " ".join(status_html)
+
+        overlap = top_overlap_by_line.get(line_id)
+        overlap_cell = "—"
+        char_cell = "—"
+        word_cell = "—"
+        if overlap:
+            lemma_id = int(overlap["stephanos_lemma_id"])
+            meineke_id = overlap.get("stephanos_meineke_id") or f"lemma {lemma_id}"
+            headword = overlap.get("stephanos_headword") or ""
+            url = stephanos_entry_url(
+                base_url=stephanos_base_url, lemma_id=lemma_id, headword=headword
+            )
+            label = (f"{meineke_id} {headword}").strip()
+            overlap_cell = f'<a href="{escape(url)}" target="_blank" rel="noopener">{escape(label)}</a>'
+            char_cell = f"{overlap['char_lcs_ratio']*100:.1f}%"
+            word_cell = f"{overlap['word_lcs_ratio']*100:.1f}%"
+
+        hay = f"{ref} {summary}"
+        if overlap:
+            hay += f" {overlap.get('stephanos_meineke_id') or ''} {overlap.get('stephanos_headword') or ''}"
+
+        rows_html.append(
             f"""
-            <section class="row" data-hay="{escape(ref + ' ' + summary)}">
-              <div class="row-head">
-                <div>
-                  <div class="ref"><a href="passages/{escape(slug)}.html">{escape(ref)}</a></div>
-                  <div class="summary">{escape(summary) if summary else '<span class="pending">No summary yet</span>'}</div>
-                </div>
-                <div class="kvs">
-                  <span class="kv">{escape(', '.join(status_bits))}</span>
-                  {overlap_kv_html}
-                </div>
-              </div>
-            </section>
+            <tr data-hay="{escape(hay)}">
+              <td class="ref"><a href="passages/{escape(slug)}.html">{escape(ref)}</a></td>
+              <td>{escape(summary) if summary else '<span class="pending">—</span>'}</td>
+              <td class="small">{status_cell}</td>
+              <td>{overlap_cell}</td>
+              <td class="small">{escape(char_cell)}</td>
+              <td class="small">{escape(word_cell)}</td>
+            </tr>
             """.strip()
         )
 
-    items = "\n".join(items_html)
     stats_json = escape(json.dumps(stats, ensure_ascii=False))
-
     body = f"""
     <header>
       <h1>{escape(title)}</h1>
@@ -202,16 +368,30 @@ def render_index(*, title: str, stats: dict, lines: list[dict], top_overlap_by_l
       </div>
     </header>
     <div class="controls">
-      <input id="q" type="search" placeholder="Filter by ref or summary…" autocomplete="off" />
+      <input id="q" type="search" placeholder="Filter by ref, summary, or overlap…" autocomplete="off" />
       <a class="btn" href="index.html">Index</a>
     </div>
-    <div class="list" id="rows">
-      {items}
+    <div class="table-wrap">
+      <table class="tbl" id="tbl">
+        <thead>
+          <tr>
+            <th>Ref</th>
+            <th>Summary</th>
+            <th>Status</th>
+            <th>Top overlap (Stephanos)</th>
+            <th>Char</th>
+            <th>Word</th>
+          </tr>
+        </thead>
+        <tbody>
+          {"".join(rows_html)}
+        </tbody>
+      </table>
     </div>
     <div class="meta">Stats: <code id="stats">{stats_json}</code></div>
     <script>
       const q = document.getElementById('q');
-      const rows = Array.from(document.querySelectorAll('.row'));
+      const rows = Array.from(document.querySelectorAll('#tbl tbody tr'));
       function norm(s){{ return (s||'').toLowerCase(); }}
       function apply(){{
         const needle = norm(q.value).trim();
@@ -239,6 +419,20 @@ def render_passage(
     stephanos_text_by_lemma_id: dict[int, dict],
 ) -> str:
     title = f"{site_title} — {ref}"
+    stephanos_base_url = _stephanos_base_url("https://stephanos.symmachus.org")
+
+    top = overlaps[0] if overlaps else None
+    greek_html = (
+        highlight_html(
+            greek_text or "",
+            start=top.get("herodian_char_start"),
+            end=top.get("herodian_char_end"),
+            cls="hl-h",
+        )
+        if top
+        else escape(greek_text or "")
+    )
+
     overlaps_html = []
     for ov in overlaps:
         lemma_id = int(ov["stephanos_lemma_id"])
@@ -246,19 +440,44 @@ def render_passage(
         headword = ov.get("stephanos_headword") or ""
         char_pct = f"{ov['char_lcs_ratio']*100:.1f}%"
         word_pct = f"{ov['word_lcs_ratio']*100:.1f}%"
-        stephanos_text = stephanos_text_by_lemma_id.get(lemma_id, {}).get("text_body")
+        stephanos_text = stephanos_text_by_lemma_id.get(lemma_id, {}).get("text_body") or ""
+        stephanos_url = stephanos_entry_url(
+            base_url=stephanos_base_url, lemma_id=lemma_id, headword=headword
+        )
+
+        label = (f"{meineke_id} {headword}").strip() or f"lemma {lemma_id}"
+        herodian_snippet = highlight_snippet_html(
+            greek_text or "",
+            start=ov.get("herodian_char_start"),
+            end=ov.get("herodian_char_end"),
+            cls="hl-h",
+            context=160,
+        )
+        stephanos_snippet = highlight_snippet_html(
+            stephanos_text,
+            start=ov.get("stephanos_char_start"),
+            end=ov.get("stephanos_char_end"),
+            cls="hl-s",
+            context=220,
+        )
 
         overlaps_html.append(
             f"""
             <div class="row">
               <div class="row-head">
-                <div class="ref">{escape(meineke_id) if meineke_id else f'lemma {lemma_id}'} {escape(headword)}</div>
+                <div class="ref"><a href="{escape(stephanos_url)}" target="_blank" rel="noopener">{escape(label)}</a></div>
                 <div class="kvs">
                   <span class="kv">char LCS {escape(str(ov['char_lcs_len']))} ({escape(char_pct)})</span>
                   <span class="kv">word LCS {escape(str(ov['word_lcs_len']))} ({escape(word_pct)})</span>
                 </div>
               </div>
-              {f'<details><summary>Stephanos text</summary><pre>{escape(stephanos_text)}</pre></details>' if stephanos_text else ''}
+              <details>
+                <summary>Show overlap highlight</summary>
+                <div class="grid">
+                  <pre class="greek" lang="el">{herodian_snippet}</pre>
+                  <pre class="greek" lang="el">{stephanos_snippet}</pre>
+                </div>
+              </details>
             </div>
             """.strip()
         )
@@ -277,14 +496,14 @@ def render_passage(
     <div class="controls">
       <a class="btn" href="../index.html">← Index</a>
     </div>
-    <div class="row">
-      <div class="ref">{escape(ref)}</div>
-      <div class="summary">{escape(summary) if summary else '<span class="pending">No summary yet</span>'}</div>
-      <div class="grid">
-        <div class="greek" lang="el">{escape(greek_text or '')}</div>
-        <div class="english">{escape(english_translation) if english_translation else '<span class="pending">Pending translation</span>'}</div>
-      </div>
-    </div>
+	    <div class="row">
+	      <div class="ref">{escape(ref)}</div>
+	      <div class="summary">{escape(summary) if summary else '<span class="pending">No summary yet</span>'}</div>
+	      <div class="grid">
+	        <div class="greek" lang="el">{greek_html}</div>
+	        <div class="english">{escape(english_translation) if english_translation else '<span class="pending">Pending translation</span>'}</div>
+	      </div>
+	    </div>
     <h2>Overlaps (Stephanos, Meineke)</h2>
     {overlaps_block}
     """.strip()
@@ -352,6 +571,10 @@ def main() -> None:
                       stephanos_headword,
                       char_lcs_len,
                       char_lcs_ratio,
+                      herodian_char_start,
+                      herodian_char_end,
+                      stephanos_char_start,
+                      stephanos_char_end,
                       word_lcs_len,
                       word_lcs_ratio,
                       shared_char_shingles,
@@ -397,6 +620,10 @@ def main() -> None:
                 "stephanos_headword": ov.get("stephanos_headword"),
                 "char_lcs_len": int(ov["char_lcs_len"]),
                 "char_lcs_ratio": float(ov["char_lcs_ratio"]),
+                "herodian_char_start": ov.get("herodian_char_start"),
+                "herodian_char_end": ov.get("herodian_char_end"),
+                "stephanos_char_start": ov.get("stephanos_char_start"),
+                "stephanos_char_end": ov.get("stephanos_char_end"),
                 "word_lcs_len": int(ov["word_lcs_len"]),
                 "word_lcs_ratio": float(ov["word_lcs_ratio"]),
             }

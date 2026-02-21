@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS stephanos_overlap_matches (
   stephanos_headword TEXT,
   char_lcs_len INTEGER NOT NULL,
   char_lcs_ratio REAL NOT NULL,
+  herodian_char_start INTEGER,
+  herodian_char_end INTEGER,
+  stephanos_char_start INTEGER,
+  stephanos_char_end INTEGER,
   word_lcs_len INTEGER NOT NULL,
   word_lcs_ratio REAL NOT NULL,
   shared_char_shingles INTEGER,
@@ -72,6 +76,11 @@ CREATE INDEX IF NOT EXISTS stephanos_overlap_matches_line_idx
 
 CREATE INDEX IF NOT EXISTS stephanos_overlap_matches_lemma_idx
   ON stephanos_overlap_matches (run_id, stephanos_lemma_id);
+
+ALTER TABLE stephanos_overlap_matches ADD COLUMN IF NOT EXISTS herodian_char_start INTEGER;
+ALTER TABLE stephanos_overlap_matches ADD COLUMN IF NOT EXISTS herodian_char_end INTEGER;
+ALTER TABLE stephanos_overlap_matches ADD COLUMN IF NOT EXISTS stephanos_char_start INTEGER;
+ALTER TABLE stephanos_overlap_matches ADD COLUMN IF NOT EXISTS stephanos_char_end INTEGER;
 
 -- Allow Stephanos read-only access to Herodian overlap data.
 GRANT USAGE ON SCHEMA public TO stephanos;
