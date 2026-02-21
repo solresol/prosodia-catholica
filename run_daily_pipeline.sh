@@ -43,6 +43,12 @@ SUMMARY_DELAY="${SUMMARY_DELAY:-0.5}"
 echo "Step 3b: summarize up to ${SUMMARY_LIMIT} lines..." | tee -a "$LOGFILE"
 uv run summarize_lines.py --limit "$SUMMARY_LIMIT" --delay "$SUMMARY_DELAY" 2>&1 | tee -a "$LOGFILE"
 
+GADGET_LIMIT="${GADGET_LIMIT:-1}"
+GADGET_DELAY="${GADGET_DELAY:-0}"
+
+echo "Step 3bb: generate up to ${GADGET_LIMIT} gadgets..." | tee -a "$LOGFILE"
+uv run gadgetize_lines.py --limit "$GADGET_LIMIT" --delay "$GADGET_DELAY" 2>&1 | tee -a "$LOGFILE"
+
 OVERLAP_METRIC_VERSION="${OVERLAP_METRIC_VERSION:-v1}"
 OVERLAP_MAX_MATCHES="${OVERLAP_MAX_MATCHES:-10}"
 

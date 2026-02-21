@@ -9,6 +9,8 @@ DB_PASSWORD = "CHANGE_ME"
 
 # OpenAI
 OPENAI_MODEL = "gpt-5.2"
+SUMMARY_MODEL = "gpt-5-mini"
+GADGET_MODEL = "gpt-5.2"
 
 # Deployment (used by run_daily_pipeline.sh)
 DEPLOY_HOST = "merah"

@@ -41,6 +41,21 @@ CREATE INDEX IF NOT EXISTS cathpros_lines_summary_pending_idx
   ON cathpros_lines (id)
   WHERE summary IS NULL;
 
+-- "Toy" gadgets: self-contained HTML/CSS/JS per passage (rendered in a sandboxed iframe).
+ALTER TABLE cathpros_lines ADD COLUMN IF NOT EXISTS gadget_html TEXT;
+ALTER TABLE cathpros_lines ADD COLUMN IF NOT EXISTS gadget_css TEXT;
+ALTER TABLE cathpros_lines ADD COLUMN IF NOT EXISTS gadget_js TEXT;
+ALTER TABLE cathpros_lines ADD COLUMN IF NOT EXISTS gadget_generated_at TIMESTAMPTZ;
+ALTER TABLE cathpros_lines ADD COLUMN IF NOT EXISTS gadget_model TEXT;
+ALTER TABLE cathpros_lines ADD COLUMN IF NOT EXISTS gadget_tokens INTEGER;
+ALTER TABLE cathpros_lines ADD COLUMN IF NOT EXISTS gadget_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE cathpros_lines ADD COLUMN IF NOT EXISTS gadget_last_attempted_at TIMESTAMPTZ;
+ALTER TABLE cathpros_lines ADD COLUMN IF NOT EXISTS gadget_error TEXT;
+
+CREATE INDEX IF NOT EXISTS cathpros_lines_gadget_pending_idx
+  ON cathpros_lines (id)
+  WHERE gadget_html IS NULL;
+
 CREATE TABLE IF NOT EXISTS stephanos_overlap_runs (
   id BIGSERIAL PRIMARY KEY,
   metric_version TEXT NOT NULL,
