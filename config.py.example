@@ -18,6 +18,8 @@ DEPLOY_PATH = "/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs"
 
 # Site generation
 SITE_TITLE = "Prosodia Catholica (Herodian)"
+SITE_CONTACT_NAME = ""  # Optional
+SITE_CONTACT_EMAILS = ["gregb@ifost.org.au", "greg.baker@mq.edu.au", "greg.baker@anu.edu.au"]
 
 # Stephanos DB (for overlap analysis)
 # On raksasa, you can usually use the local UNIX socket by leaving host unset/empty.
