@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import os
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 
@@ -48,6 +50,87 @@ def _site_contact_emails(default: list[str]) -> list[str]:
 
     emails = [e for e in emails if "@" in e]
     return emails or default
+
+
+def _config_int(attr: str, default: int) -> int:
+    try:
+        import config as _config
+    except ImportError:
+        _config = None
+    raw = getattr(_config, attr, None) if _config else None
+    if raw in (None, ""):
+        return int(default)
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
+def _config_str(attr: str, default: str) -> str:
+    try:
+        import config as _config
+    except ImportError:
+        _config = None
+    raw = getattr(_config, attr, None) if _config else None
+    if raw in (None, ""):
+        return str(default)
+    return str(raw)
+
+
+def _env_or_config_int(env_name: str, config_attr: str, default: int) -> int:
+    raw_env = os.getenv(env_name)
+    if raw_env not in (None, ""):
+        try:
+            return int(raw_env)
+        except Exception:
+            pass
+    return _config_int(config_attr, default)
+
+
+def _to_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _fmt_utc(dt: datetime | None) -> str:
+    dt_utc = _to_utc(dt)
+    if dt_utc is None:
+        return "—"
+    return dt_utc.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _estimate_backlog(
+    *, remaining: int, per_run_capacity: int, runs_per_day: int, now_utc: datetime
+) -> dict[str, int | datetime | None]:
+    remaining_i = max(0, int(remaining or 0))
+    per_run_i = max(0, int(per_run_capacity or 0))
+    runs_per_day_i = max(1, int(runs_per_day or 1))
+    if remaining_i <= 0:
+        return {
+            "remaining": 0,
+            "runs_left": 0,
+            "days_left": 0,
+            "eta": now_utc,
+        }
+    if per_run_i <= 0:
+        return {
+            "remaining": remaining_i,
+            "runs_left": None,
+            "days_left": None,
+            "eta": None,
+        }
+    runs_left = int(math.ceil(remaining_i / per_run_i))
+    days_left = int(math.ceil(runs_left / runs_per_day_i))
+    eta = now_utc + timedelta(days=days_left)
+    return {
+        "remaining": remaining_i,
+        "runs_left": runs_left,
+        "days_left": days_left,
+        "eta": eta,
+    }
 
 
 STYLE_CSS = """
@@ -580,6 +663,7 @@ def render_index(*, title: str, stats: dict, lines: list[dict], top_overlap_by_l
       <input id="q" type="search" placeholder="Filter by ref, summary, or overlap…" autocomplete="off" />
       <a class="btn" href="index.html">Index</a>
       <a class="btn" href="analysis/index.html">Analysis</a>
+      <a class="btn" href="analysis/progress.html">Progress</a>
       <a class="btn" href="analysis/coverage.html">Coverage</a>
       <a class="btn" href="passages.json">Data (JSON)</a>
       <a class="btn" href="https://github.com/solresol/prosodia-catholica" target="_blank" rel="noopener">GitHub</a>
@@ -842,6 +926,267 @@ def _greek_casefold_strip(text: str) -> str:
     return " ".join("".join(out).split())
 
 
+def _render_progress_page(*, site_title: str, progress_data: dict) -> str:
+    now_utc = _to_utc(progress_data.get("now_utc")) or datetime.now(timezone.utc)
+    runs_per_day = max(1, int(progress_data.get("runs_per_day") or 1))
+
+    total_all = max(0, int(progress_data.get("total_all") or 0))
+    total_non_e = max(0, int(progress_data.get("total_non_e") or 0))
+    total_translatable = max(0, int(progress_data.get("total_translatable") or 0))
+    translated_done = max(0, int(progress_data.get("translated_done") or 0))
+    summarized_done = max(0, int(progress_data.get("summarized_done") or 0))
+    gadget_done = max(0, int(progress_data.get("gadget_done") or 0))
+    gadget_ready_pending = max(0, int(progress_data.get("gadget_ready_pending") or 0))
+    gadget_blocked_translation = max(0, int(progress_data.get("gadget_blocked_translation") or 0))
+
+    translation_limit = max(0, int(progress_data.get("translation_limit") or 0))
+    summary_limit = max(0, int(progress_data.get("summary_limit") or 0))
+    gadget_limit = max(0, int(progress_data.get("gadget_limit") or 0))
+
+    source_tsv_rows_raw = progress_data.get("source_tsv_rows")
+    source_tsv_rows = (
+        max(0, int(source_tsv_rows_raw)) if source_tsv_rows_raw is not None else None
+    )
+
+    def _fmt_int(n: int | None) -> str:
+        if n is None:
+            return "—"
+        return f"{int(n):,}"
+
+    def _fmt_estimate(
+        est: dict[str, int | datetime | None] | None,
+    ) -> tuple[str, str, str]:
+        if not est:
+            return "—", "—", "unknown"
+        remaining = int(est.get("remaining") or 0)
+        days_left = est.get("days_left")
+        eta = est.get("eta")
+        runs_left = est.get("runs_left")
+        if remaining <= 0:
+            return "0", "0", "complete"
+        runs_text = "—" if runs_left is None else str(int(runs_left))
+        days_text = "—" if days_left is None else str(int(days_left))
+        if eta is None:
+            return runs_text, days_text, "blocked (limit=0)"
+        return runs_text, days_text, _fmt_utc(_to_utc(eta))
+
+    backlog_rows: list[str] = []
+    backlog_estimates: list[dict[str, int | datetime | None]] = []
+    blocked_tasks: list[str] = []
+
+    if source_tsv_rows is not None:
+        import_done = min(total_all, source_tsv_rows)
+        import_remaining = max(0, source_tsv_rows - import_done)
+        import_est = _estimate_backlog(
+            remaining=import_remaining,
+            per_run_capacity=max(source_tsv_rows, 1),
+            runs_per_day=runs_per_day,
+            now_utc=now_utc,
+        )
+        if import_remaining > 0 and import_est.get("eta") is None:
+            blocked_tasks.append("import")
+        if import_remaining > 0:
+            backlog_estimates.append(import_est)
+        import_runs, import_days, import_eta = _fmt_estimate(import_est)
+        backlog_rows.append(
+            f"<tr><td class='small'>2</td><td>import_herodian_tsv.py</td>"
+            f"<td class='small'>{_fmt_int(import_done)}/{_fmt_int(source_tsv_rows)}</td>"
+            f"<td class='small'>{_fmt_int(import_remaining)}</td>"
+            f"<td class='small'>full file</td>"
+            f"<td class='small'>{escape(import_runs)}</td>"
+            f"<td class='small'>{escape(import_days)}</td>"
+            f"<td class='small'>{escape(import_eta)}</td>"
+            f"<td class='small'>{escape(_fmt_utc(progress_data.get('latest_imported_at')))}</td>"
+            f"<td>TSV source rows known.</td></tr>"
+        )
+    else:
+        backlog_rows.append(
+            f"<tr><td class='small'>2</td><td>import_herodian_tsv.py</td>"
+            f"<td class='small'>{_fmt_int(total_all)}/?</td>"
+            f"<td class='small'>—</td>"
+            f"<td class='small'>full file</td>"
+            f"<td class='small'>—</td>"
+            f"<td class='small'>—</td>"
+            f"<td class='small'>unknown (TSV missing)</td>"
+            f"<td class='small'>{escape(_fmt_utc(progress_data.get('latest_imported_at')))}</td>"
+            f"<td>TSV source file not found on this host.</td></tr>"
+        )
+
+    translation_remaining = max(0, total_translatable - translated_done)
+    translation_est = _estimate_backlog(
+        remaining=translation_remaining,
+        per_run_capacity=translation_limit,
+        runs_per_day=runs_per_day,
+        now_utc=now_utc,
+    )
+    if translation_remaining > 0:
+        backlog_estimates.append(translation_est)
+    if translation_remaining > 0 and translation_est.get("eta") is None:
+        blocked_tasks.append("translation")
+    trans_runs, trans_days, trans_eta = _fmt_estimate(translation_est)
+    backlog_rows.append(
+        f"<tr><td class='small'>3</td><td>translate_lines.py</td>"
+        f"<td class='small'>{_fmt_int(translated_done)}/{_fmt_int(total_translatable)}</td>"
+        f"<td class='small'>{_fmt_int(translation_remaining)}</td>"
+        f"<td class='small'>{_fmt_int(translation_limit)}/run</td>"
+        f"<td class='small'>{escape(trans_runs)}</td>"
+        f"<td class='small'>{escape(trans_days)}</td>"
+        f"<td class='small'>{escape(trans_eta)}</td>"
+        f"<td class='small'>{escape(_fmt_utc(progress_data.get('latest_translated_at')))}</td>"
+        f"<td>Scope excludes ref E and major 0.</td></tr>"
+    )
+
+    summary_remaining = max(0, total_non_e - summarized_done)
+    summary_est = _estimate_backlog(
+        remaining=summary_remaining,
+        per_run_capacity=summary_limit,
+        runs_per_day=runs_per_day,
+        now_utc=now_utc,
+    )
+    if summary_remaining > 0:
+        backlog_estimates.append(summary_est)
+    if summary_remaining > 0 and summary_est.get("eta") is None:
+        blocked_tasks.append("summary")
+    sum_runs, sum_days, sum_eta = _fmt_estimate(summary_est)
+    backlog_rows.append(
+        f"<tr><td class='small'>3b</td><td>summarize_lines.py</td>"
+        f"<td class='small'>{_fmt_int(summarized_done)}/{_fmt_int(total_non_e)}</td>"
+        f"<td class='small'>{_fmt_int(summary_remaining)}</td>"
+        f"<td class='small'>{_fmt_int(summary_limit)}/run</td>"
+        f"<td class='small'>{escape(sum_runs)}</td>"
+        f"<td class='small'>{escape(sum_days)}</td>"
+        f"<td class='small'>{escape(sum_eta)}</td>"
+        f"<td class='small'>{escape(_fmt_utc(progress_data.get('latest_summarized_at')))}</td>"
+        f"<td>Scope excludes ref E.</td></tr>"
+    )
+
+    gadget_remaining = max(0, total_translatable - gadget_done)
+    gadget_est = _estimate_backlog(
+        remaining=gadget_remaining,
+        per_run_capacity=gadget_limit,
+        runs_per_day=runs_per_day,
+        now_utc=now_utc,
+    )
+    if gadget_remaining > 0:
+        backlog_estimates.append(gadget_est)
+    if gadget_remaining > 0 and gadget_est.get("eta") is None:
+        blocked_tasks.append("gadget")
+    gad_runs, gad_days, gad_eta = _fmt_estimate(gadget_est)
+    backlog_rows.append(
+        f"<tr><td class='small'>3bb</td><td>gadgetize_lines.py</td>"
+        f"<td class='small'>{_fmt_int(gadget_done)}/{_fmt_int(total_translatable)}</td>"
+        f"<td class='small'>{_fmt_int(gadget_remaining)}</td>"
+        f"<td class='small'>{_fmt_int(gadget_limit)}/run</td>"
+        f"<td class='small'>{escape(gad_runs)}</td>"
+        f"<td class='small'>{escape(gad_days)}</td>"
+        f"<td class='small'>{escape(gad_eta)}</td>"
+        f"<td class='small'>{escape(_fmt_utc(progress_data.get('latest_gadget_generated_at')))}</td>"
+        f"<td>{_fmt_int(gadget_ready_pending)} ready; {_fmt_int(gadget_blocked_translation)} blocked on translation.</td></tr>"
+    )
+
+    if blocked_tasks:
+        overall_eta_html = (
+            "<span class='pending'>Blocked: set non-zero limits for "
+            + escape(", ".join(blocked_tasks))
+            + ".</span>"
+        )
+    else:
+        days_candidates = [
+            int(est.get("days_left") or 0)
+            for est in backlog_estimates
+            if est.get("days_left") is not None
+        ]
+        max_days = max(days_candidates) if days_candidates else 0
+        if max_days <= 0:
+            overall_eta_html = "All backlog tasks complete."
+        else:
+            overall_eta_html = (
+                f"Estimated completion in {max_days} day(s): "
+                f"<code>{escape(_fmt_utc(now_utc + timedelta(days=max_days)))}</code>."
+            )
+
+    overlap_row = progress_data.get("latest_overlap_run") or {}
+    overlap_duration = progress_data.get("latest_overlap_duration_seconds")
+    overlap_avg_duration = progress_data.get("overlap_avg_duration_seconds")
+
+    def _fmt_seconds(seconds: float | int | None) -> str:
+        if seconds is None:
+            return "—"
+        sec = max(0, int(round(float(seconds))))
+        h, rem = divmod(sec, 3600)
+        m, s = divmod(rem, 60)
+        if h:
+            return f"{h}h {m}m {s}s"
+        if m:
+            return f"{m}m {s}s"
+        return f"{s}s"
+
+    recurring_rows = [
+        "<tr><td class='small'>0</td><td>git pull (if clean)</td><td class='small'>daily</td>"
+        "<td class='small'>no backlog</td><td class='small'>next cron run</td>"
+        "<td>Runs only when working tree is clean.</td></tr>",
+        "<tr><td class='small'>1</td><td>init_db.py</td><td class='small'>daily</td>"
+        "<td class='small'>no backlog</td><td class='small'>same run</td>"
+        "<td>Idempotent schema/grants check.</td></tr>",
+        (
+            f"<tr><td class='small'>3c</td><td>compute_overlaps.py</td><td class='small'>daily full pass</td>"
+            f"<td class='small'>no backlog</td><td class='small'>same run</td>"
+            f"<td>Latest run: id {_fmt_int(overlap_row.get('id'))}, "
+            f"finished {_fmt_utc(overlap_row.get('finished_at'))}, "
+            f"duration {_fmt_seconds(overlap_duration)} (avg {_fmt_seconds(overlap_avg_duration)}), "
+            f"matches {_fmt_int(progress_data.get('latest_overlap_match_count'))}.</td></tr>"
+        ),
+        "<tr><td class='small'>4</td><td>generate_site.py</td><td class='small'>daily</td>"
+        "<td class='small'>no backlog</td><td class='small'>same run</td>"
+        f"<td>This page generated at {_fmt_utc(now_utc)}.</td></tr>",
+        "<tr><td class='small'>5</td><td>rsync deploy</td><td class='small'>daily</td>"
+        "<td class='small'>no backlog</td><td class='small'>immediately after step 4</td>"
+        "<td>Deploy target: configured in config.py (DEPLOY_HOST/DEPLOY_PATH).</td></tr>",
+    ]
+
+    cadence_text = "once per day" if runs_per_day == 1 else f"{runs_per_day} times per day"
+
+    body = f"""
+    <header>
+      <h1><a href="../index.html">{escape(site_title)}</a></h1>
+      <div class="meta"><span class="pill">Progress</span> <span class="pill">cron cadence: {escape(cadence_text)}</span></div>
+    </header>
+    <div class="controls">
+      <a class="btn" href="../index.html">← Index</a>
+      <a class="btn" href="index.html">Analysis</a>
+      <a class="btn" href="coverage.html">Coverage</a>
+    </div>
+    <div class="row">
+      <div class="summary">{overall_eta_html}</div>
+    </div>
+    <h2>Backlog Tasks (ETA)</h2>
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Step</th><th>Task</th><th>Done/Total</th><th>Remaining</th><th>Capacity</th><th>Runs left</th><th>Days left</th><th>ETA (UTC)</th><th>Last success</th><th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>{"".join(backlog_rows)}</tbody>
+      </table>
+    </div>
+    <h2>Recurring Daily Tasks</h2>
+    <div class="table-wrap">
+      <table class="tbl">
+        <thead>
+          <tr><th>Step</th><th>Task</th><th>Schedule</th><th>Backlog</th><th>ETA</th><th>Notes</th></tr>
+        </thead>
+        <tbody>{"".join(recurring_rows)}</tbody>
+      </table>
+    </div>
+    <div class="row">
+      <div class="summary">Estimates assume fixed per-run limits and regular cron execution ({escape(cadence_text)}).</div>
+    </div>
+    """.strip()
+
+    return render_shell(title=f"{site_title} — Progress", body_html=body)
+
+
 def _render_analysis_index(*, site_title: str, summary_html: str) -> str:
     body = f"""
     <header>
@@ -850,6 +1195,7 @@ def _render_analysis_index(*, site_title: str, summary_html: str) -> str:
     </header>
     <div class="controls">
       <a class="btn" href="../index.html">← Index</a>
+      <a class="btn" href="progress.html">Progress</a>
       <a class="btn" href="coverage.html">Coverage</a>
       <a class="btn" href="reuse_predictors_words.html">TF‑IDF + LogReg (words)</a>
       <a class="btn" href="reuse_predictors_ngrams_2_3.html">TF‑IDF + LogReg (2–3 grams)</a>
@@ -1082,12 +1428,19 @@ def _generate_analysis_pages(
     lines: list[dict],
     overlaps_by_line: dict[int, list[dict]],
     latest_run_id: int | None,
+    progress_data: dict | None,
     reuse_char_lcs_min: int,
     reuse_word_lcs_min: int,
     top_k: int = 50,
 ) -> None:
     analysis_dir = out_dir / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
+
+    if progress_data is not None:
+        (analysis_dir / "progress.html").write_text(
+            _render_progress_page(site_title=site_title, progress_data=progress_data),
+            encoding="utf-8",
+        )
 
     if not latest_run_id:
         (analysis_dir / "index.html").write_text(
@@ -1434,6 +1787,9 @@ def main() -> None:
     conn = get_connection(dict_cursor=True)
     latest_run_id = None
     overlap_rows = []
+    progress_row = None
+    latest_overlap_run_meta = None
+    overlap_avg_duration_seconds = None
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -1470,7 +1826,31 @@ def main() -> None:
 
             cur.execute(
                 """
-                SELECT id
+                SELECT
+                  COUNT(*) AS total_all,
+                  COUNT(*) FILTER (WHERE ref NOT IN ('E')) AS total_non_e,
+                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0) AS total_translatable,
+                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND english_translation IS NOT NULL) AS translated_done,
+                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND summary IS NOT NULL) AS summarized_done,
+                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND gadget_html IS NOT NULL) AS gadget_done,
+                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND english_translation IS NOT NULL AND gadget_html IS NULL) AS gadget_ready_pending,
+                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND english_translation IS NULL) AS gadget_blocked_translation,
+                  MAX(imported_at) AS latest_imported_at,
+                  MAX(translated_at) AS latest_translated_at,
+                  MAX(summarized_at) AS latest_summarized_at,
+                  MAX(gadget_generated_at) AS latest_gadget_generated_at
+                FROM cathpros_lines
+                """
+            )
+            progress_row = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT
+                  id,
+                  created_at,
+                  finished_at,
+                  EXTRACT(EPOCH FROM (finished_at - created_at)) AS duration_seconds
                 FROM stephanos_overlap_runs
                 WHERE metric_version = %s
                   AND finished_at IS NOT NULL
@@ -1482,6 +1862,16 @@ def main() -> None:
             run = cur.fetchone()
             if run:
                 latest_run_id = int(run["id"])
+                latest_overlap_run_meta = {
+                    "id": latest_run_id,
+                    "created_at": run.get("created_at"),
+                    "finished_at": run.get("finished_at"),
+                    "duration_seconds": (
+                        float(run["duration_seconds"])
+                        if run.get("duration_seconds") is not None
+                        else None
+                    ),
+                }
                 cur.execute(
                     """
                     SELECT
@@ -1506,6 +1896,34 @@ def main() -> None:
                     (latest_run_id,),
                 )
                 overlap_rows = cur.fetchall()
+
+                cur.execute(
+                    """
+                    SELECT
+                      COUNT(*) AS match_count,
+                      COUNT(DISTINCT herodian_line_id) AS matched_lines
+                    FROM stephanos_overlap_matches
+                    WHERE run_id = %s
+                    """,
+                    (latest_run_id,),
+                )
+                run_counts = cur.fetchone()
+                if latest_overlap_run_meta is not None and run_counts is not None:
+                    latest_overlap_run_meta["match_count"] = int(run_counts["match_count"] or 0)
+                    latest_overlap_run_meta["matched_lines"] = int(run_counts["matched_lines"] or 0)
+
+            cur.execute(
+                """
+                SELECT AVG(EXTRACT(EPOCH FROM (finished_at - created_at))) AS avg_duration_seconds
+                FROM stephanos_overlap_runs
+                WHERE metric_version = %s
+                  AND finished_at IS NOT NULL
+                """,
+                (args.overlap_metric_version,),
+            )
+            avg_row = cur.fetchone()
+            if avg_row is not None and avg_row.get("avg_duration_seconds") is not None:
+                overlap_avg_duration_seconds = float(avg_row["avg_duration_seconds"])
     finally:
         conn.close()
 
@@ -1532,6 +1950,66 @@ def main() -> None:
         "translated": int(stats_row["translated"] or 0),
         "summarized": int(stats_row["summarized"] or 0),
         "latest_overlap_run_id": latest_run_id,
+    }
+
+    source_tsv_path = Path("HerodianCathPros.txt")
+    source_tsv_rows = None
+    if source_tsv_path.exists():
+        with source_tsv_path.open("r", encoding="utf-8") as f:
+            source_tsv_rows = sum(1 for _ in f)
+
+    runs_per_day = max(
+        1, _env_or_config_int("PIPELINE_RUNS_PER_DAY", "PIPELINE_RUNS_PER_DAY", 1)
+    )
+    translation_limit = max(
+        0, _env_or_config_int("TRANSLATION_LIMIT", "TRANSLATION_LIMIT", 5)
+    )
+    summary_limit = max(0, _env_or_config_int("SUMMARY_LIMIT", "SUMMARY_LIMIT", 25))
+    gadget_limit = max(0, _env_or_config_int("GADGET_LIMIT", "GADGET_LIMIT", 1))
+
+    progress_data = {
+        "now_utc": datetime.now(timezone.utc),
+        "runs_per_day": runs_per_day,
+        "translation_limit": translation_limit,
+        "summary_limit": summary_limit,
+        "gadget_limit": gadget_limit,
+        "total_all": int((progress_row or {}).get("total_all") or 0),
+        "total_non_e": int((progress_row or {}).get("total_non_e") or 0),
+        "total_translatable": int((progress_row or {}).get("total_translatable") or 0),
+        "translated_done": int((progress_row or {}).get("translated_done") or 0),
+        "summarized_done": int((progress_row or {}).get("summarized_done") or 0),
+        "gadget_done": int((progress_row or {}).get("gadget_done") or 0),
+        "gadget_ready_pending": int(
+            (progress_row or {}).get("gadget_ready_pending") or 0
+        ),
+        "gadget_blocked_translation": int(
+            (progress_row or {}).get("gadget_blocked_translation") or 0
+        ),
+        "latest_imported_at": (progress_row or {}).get("latest_imported_at"),
+        "latest_translated_at": (progress_row or {}).get("latest_translated_at"),
+        "latest_summarized_at": (progress_row or {}).get("latest_summarized_at"),
+        "latest_gadget_generated_at": (
+            progress_row or {}
+        ).get("latest_gadget_generated_at"),
+        "source_tsv_rows": source_tsv_rows,
+        "source_tsv_path": str(source_tsv_path),
+        "latest_overlap_run": latest_overlap_run_meta,
+        "latest_overlap_duration_seconds": (
+            latest_overlap_run_meta.get("duration_seconds")
+            if latest_overlap_run_meta is not None
+            else None
+        ),
+        "latest_overlap_match_count": (
+            latest_overlap_run_meta.get("match_count")
+            if latest_overlap_run_meta is not None
+            else None
+        ),
+        "latest_overlap_matched_lines": (
+            latest_overlap_run_meta.get("matched_lines")
+            if latest_overlap_run_meta is not None
+            else None
+        ),
+        "overlap_avg_duration_seconds": overlap_avg_duration_seconds,
     }
 
     (out_dir / "style.css").write_text(STYLE_CSS.strip() + "\n", encoding="utf-8")
@@ -1629,6 +2107,7 @@ def main() -> None:
         lines=lines,
         overlaps_by_line=overlaps_by_line,
         latest_run_id=latest_run_id,
+        progress_data=progress_data,
         reuse_char_lcs_min=int(args.reuse_char_lcs_min),
         reuse_word_lcs_min=int(args.reuse_word_lcs_min),
     )

@@ -66,6 +66,8 @@ This repo includes a small PostgreSQL-backed pipeline to:
 The site is generated as:
 - `site/index.html` (index)
 - `site/passages/<ref>.html` (one page per passage)
+- `site/analysis/progress.html` (cron-task progress + ETA by task)
+- `site/analysis/coverage.html` and predictor pages (reuse analysis)
 
 ### Daily cron (raksasa)
 
