@@ -315,57 +315,13 @@ def _stephanos_base_url(default: str) -> str:
     return (CONFIG_STEPHANOS_SITE_BASE_URL or default).rstrip("/")
 
 
-_GREEK_LETTER_SLUG_BY_CHAR = {
-    "Α": "alpha",
-    "Β": "beta",
-    "Γ": "gamma",
-    "Δ": "delta",
-    "Ε": "epsilon",
-    "Ζ": "zeta",
-    "Η": "eta",
-    "Θ": "theta",
-    "Ι": "iota",
-    "Κ": "kappa",
-    "Λ": "lambda",
-    "Μ": "mu",
-    "Ν": "nu",
-    "Ξ": "xi",
-    "Ο": "omicron",
-    "Π": "pi",
-    "Ρ": "rho",
-    "Σ": "sigma",
-    "Τ": "tau",
-    "Υ": "upsilon",
-    "Φ": "phi",
-    "Χ": "chi",
-    "Ψ": "psi",
-    "Ω": "omega",
-}
-
-
-def _strip_combining(ch: str) -> str:
-    decomposed = unicodedata.normalize("NFD", ch)
-    for c in decomposed:
-        if not unicodedata.combining(c):
-            return c
-    return ch
-
-
-def stephanos_letter_slug(headword: str | None) -> str | None:
-    if not headword:
-        return None
-    for ch in headword:
-        base = _strip_combining(ch).upper()
-        slug = _GREEK_LETTER_SLUG_BY_CHAR.get(base)
-        if slug:
-            return slug
-    return None
-
-
-def stephanos_entry_url(*, base_url: str, lemma_id: int, headword: str | None) -> str:
-    slug = stephanos_letter_slug(headword)
-    if slug:
-        return f"{base_url}/letter_{slug}.html#lemma-{lemma_id}"
+def stephanos_entry_url(*, base_url: str, lemma_id: int) -> str:
+    try:
+        lemma_num = int(lemma_id)
+    except Exception:
+        lemma_num = 0
+    if lemma_num > 0:
+        return f"{base_url}/headword_{lemma_num}.html"
     return f"{base_url}/cgi-bin/review.cgi?id={lemma_id}"
 
 
@@ -622,9 +578,7 @@ def render_index(*, title: str, stats: dict, lines: list[dict], top_overlap_by_l
             lemma_id = int(overlap["stephanos_lemma_id"])
             meineke_id = overlap.get("stephanos_meineke_id") or f"lemma {lemma_id}"
             headword = overlap.get("stephanos_headword") or ""
-            url = stephanos_entry_url(
-                base_url=stephanos_base_url, lemma_id=lemma_id, headword=headword
-            )
+            url = stephanos_entry_url(base_url=stephanos_base_url, lemma_id=lemma_id)
             label = (f"{meineke_id} {headword}").strip()
             overlap_cell = f'<a href="{escape(url)}" target="_blank" rel="noopener">{escape(label)}</a>'
             char_cell = f"{overlap['char_lcs_ratio']*100:.1f}%"
@@ -825,9 +779,7 @@ def render_passage(
         char_pct = f"{ov['char_lcs_ratio']*100:.1f}%"
         word_pct = f"{ov['word_lcs_ratio']*100:.1f}%"
         stephanos_text = stephanos_text_by_lemma_id.get(lemma_id, {}).get("text_body") or ""
-        stephanos_url = stephanos_entry_url(
-            base_url=stephanos_base_url, lemma_id=lemma_id, headword=headword
-        )
+        stephanos_url = stephanos_entry_url(base_url=stephanos_base_url, lemma_id=lemma_id)
         color_cls = (ov.get("_color_cls") or "").strip()
 
         label = (f"{meineke_id} {headword}").strip() or f"lemma {lemma_id}"
@@ -1486,7 +1438,6 @@ def _generate_analysis_pages(
 
     stephanos_spans_by_lemma: dict[int, list[tuple[int, int]]] = {}
     stephanos_label_by_lemma: dict[int, str] = {}
-    stephanos_headword_by_lemma: dict[int, str | None] = {}
 
     for row in lines:
         line_id = int(row["id"])
@@ -1515,7 +1466,6 @@ def _generate_analysis_pages(
                 headword = (ov.get("stephanos_headword") or "").strip()
                 label = (f"{meineke_id} {headword}").strip() or f"lemma {lemma_id}"
                 stephanos_label_by_lemma.setdefault(lemma_id, label)
-                stephanos_headword_by_lemma.setdefault(lemma_id, headword or None)
 
         merged = _merge_spans(spans, clip_end=total_len)
         covered = _spans_total_len(merged)
@@ -1596,8 +1546,7 @@ def _generate_analysis_pages(
                 total_len = lengths.get(lemma_id) or 0
                 ratio = (covered / total_len) if total_len else 0.0
                 label = stephanos_label_by_lemma.get(lemma_id) or f"lemma {lemma_id}"
-                headword = stephanos_headword_by_lemma.get(lemma_id)
-                url = stephanos_entry_url(base_url=stephanos_base_url, lemma_id=int(lemma_id), headword=headword)
+                url = stephanos_entry_url(base_url=stephanos_base_url, lemma_id=int(lemma_id))
                 rows.append(
                     {
                         "label_html": f'<a href="{escape(url)}" target="_blank" rel="noopener">{escape(label)}</a>',
