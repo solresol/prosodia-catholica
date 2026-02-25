@@ -24,40 +24,33 @@ fi
 echo "Step 1: init DB schema..." | tee -a "$LOGFILE"
 uv run init_db.py 2>&1 | tee -a "$LOGFILE"
 
-echo "Step 2: import TSV (if present)..." | tee -a "$LOGFILE"
-if [ -f "HerodianCathPros.txt" ]; then
-  uv run import_herodian_tsv.py HerodianCathPros.txt 2>&1 | tee -a "$LOGFILE"
-else
-  echo "No HerodianCathPros.txt present; skipping import" | tee -a "$LOGFILE"
-fi
-
 TRANSLATION_LIMIT="${TRANSLATION_LIMIT:-5}"
 TRANSLATION_DELAY="${TRANSLATION_DELAY:-1}"
 PIPELINE_RUNS_PER_DAY="${PIPELINE_RUNS_PER_DAY:-1}"
 export TRANSLATION_LIMIT TRANSLATION_DELAY PIPELINE_RUNS_PER_DAY
 
-echo "Step 3: translate up to ${TRANSLATION_LIMIT} lines..." | tee -a "$LOGFILE"
+echo "Step 2: translate up to ${TRANSLATION_LIMIT} lines..." | tee -a "$LOGFILE"
 uv run translate_lines.py --limit "$TRANSLATION_LIMIT" --delay "$TRANSLATION_DELAY" 2>&1 | tee -a "$LOGFILE"
 
 SUMMARY_LIMIT="${SUMMARY_LIMIT:-25}"
 SUMMARY_DELAY="${SUMMARY_DELAY:-0.5}"
 export SUMMARY_LIMIT SUMMARY_DELAY
 
-echo "Step 3b: summarize up to ${SUMMARY_LIMIT} lines..." | tee -a "$LOGFILE"
+echo "Step 2b: summarize up to ${SUMMARY_LIMIT} lines..." | tee -a "$LOGFILE"
 uv run summarize_lines.py --limit "$SUMMARY_LIMIT" --delay "$SUMMARY_DELAY" 2>&1 | tee -a "$LOGFILE"
 
 GADGET_LIMIT="${GADGET_LIMIT:-1}"
 GADGET_DELAY="${GADGET_DELAY:-0}"
 export GADGET_LIMIT GADGET_DELAY
 
-echo "Step 3bb: generate up to ${GADGET_LIMIT} gadgets..." | tee -a "$LOGFILE"
+echo "Step 2bb: generate up to ${GADGET_LIMIT} gadgets..." | tee -a "$LOGFILE"
 uv run gadgetize_lines.py --limit "$GADGET_LIMIT" --delay "$GADGET_DELAY" 2>&1 | tee -a "$LOGFILE"
 
 OVERLAP_METRIC_VERSION="${OVERLAP_METRIC_VERSION:-v1}"
 OVERLAP_MAX_MATCHES="${OVERLAP_MAX_MATCHES:-10}"
 export OVERLAP_METRIC_VERSION OVERLAP_MAX_MATCHES
 
-echo "Step 3c: compute Stephanos overlaps (${OVERLAP_METRIC_VERSION})..." | tee -a "$LOGFILE"
+echo "Step 3: compute Stephanos overlaps (${OVERLAP_METRIC_VERSION})..." | tee -a "$LOGFILE"
 uv run compute_overlaps.py --metric-version "$OVERLAP_METRIC_VERSION" --max-matches "$OVERLAP_MAX_MATCHES" 2>&1 | tee -a "$LOGFILE"
 
 echo "Step 4: generate site..." | tee -a "$LOGFILE"

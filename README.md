@@ -29,7 +29,6 @@ Write a script that:
 ## Current pipeline (DB → translation → static site)
 
 This repo includes a small PostgreSQL-backed pipeline to:
-- import `HerodianCathPros.txt` (TSV) into `cathpros_lines`
 - translate a few more lines per day with OpenAI (`gpt-5.2` by default)
 - summarize passages into short index labels with OpenAI (`gpt-5-mini` by default)
 - compute overlaps vs Stephanos (Meineke) into `stephanos_overlap_*`

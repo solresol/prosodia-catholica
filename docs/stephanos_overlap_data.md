@@ -193,7 +193,6 @@ Remember:
 
 On `raksasa`, a daily cron job runs the pipeline (`run_daily_pipeline.sh`) which:
 
-- imports TSV updates (if any)
 - translates/summarizes small batches
 - recomputes overlaps vs current Meineke texts
 - regenerates the static site and deploys it
@@ -201,4 +200,3 @@ On `raksasa`, a daily cron job runs the pipeline (`run_daily_pipeline.sh`) which
 The live site provides human-readable examples and highlights:
 
 - https://prosodia-catholica.symmachus.org/
-
