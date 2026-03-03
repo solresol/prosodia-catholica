@@ -155,6 +155,31 @@ a:hover{text-decoration:underline;}
 header{display:flex;gap:16px;align-items:baseline;flex-wrap:wrap;}
 h1{font-size:28px;margin:0;}
 .meta{color:var(--muted);font-size:14px;}
+.banner{
+  margin:0 0 16px;
+  padding:12px 14px;
+  border-radius:14px;
+  border:1px solid var(--border);
+  background:rgba(17,26,51,.55);
+}
+.banner.warn{
+  border-color:#5a3b24;
+  background:rgba(90,59,36,.20);
+}
+.banner .badge{
+  display:inline-block;
+  padding:2px 10px;
+  border-radius:999px;
+  border:1px solid #5a3b24;
+  background:rgba(90,59,36,.35);
+  color:#ffd9c2;
+  font-size:12px;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+  margin-right:8px;
+  vertical-align:1px;
+}
+.banner .muted{color:var(--muted);}
 .controls{margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;}
 input[type="search"]{
   flex:1 1 320px;
@@ -254,6 +279,13 @@ table.tbl td.small{white-space:nowrap;}
   line-height:1.55;
   white-space:pre-wrap;
 }
+.prose{
+  font-size:15px;
+  line-height:1.55;
+}
+.prose p{margin:0 0 10px;}
+.prose ul{margin:0 0 10px 20px;}
+.prose li{margin:0 0 6px;}
 .pending{color:var(--muted);font-style:italic;}
 .hl{padding:0 2px;border-radius:4px;}
 .hl-h{background:rgba(255,214,10,.22);}
@@ -470,6 +502,13 @@ def render_shell(*, title: str, body_html: str) -> str:
     )
     contact_email_codes = [[ord(ch) for ch in e] for e in contact_emails]
     contact_name_codes = [ord(ch) for ch in contact_name] if contact_name else []
+    banner_html = """
+    <div class="banner warn">
+      <span class="badge">Warning</span>
+      This is a translation of A. Lentz’s reconstructed 19th‑century Teubner text of Herodian’s <em>De Prosodia Catholica</em> (not a continuous ancient original).
+      <a href="/about/lentz.html">About the Lentz edition</a><span class="muted">.</span>
+    </div>
+    """.strip()
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -480,6 +519,7 @@ def render_shell(*, title: str, body_html: str) -> str:
 </head>
 <body>
   <div class="wrap">
+    {banner_html}
     {body_html}
     <footer>
       <span id="contact-widget">
@@ -859,6 +899,57 @@ def render_passage(
     {overlaps_block}
     """.strip()
 
+    return render_shell(title=title, body_html=body)
+
+
+def render_about_lentz(*, site_title: str) -> str:
+    title = f"{site_title} — About the Lentz edition"
+    body = f"""
+    <header>
+      <h1><a href="/index.html">{escape(site_title)}</a></h1>
+      <div class="meta"><span class="pill">About the text</span></div>
+    </header>
+    <div class="controls">
+      <a class="btn" href="/index.html">← Index</a>
+      <a class="btn" href="/analysis/index.html">Analysis</a>
+    </div>
+
+    <div class="row">
+      <div class="ref">What this site is</div>
+      <div class="prose">
+        <p>This project translates the Greek text of Herodian’s <em>Περὶ καθολικῆς προσῳδίας</em> (<em>De Prosodia Catholica</em>) as printed in the 19th‑century Teubner edition edited by <strong>A. Lentz</strong> (1867–1870), the version widely reused in modern digital corpora (including TLG).</p>
+        <p>Herodian’s original <em>Περὶ καθολικῆς προσῳδίας</em> is not preserved as a complete work. What survives is fragmentary and mediated through later grammatical sources (quotations, excerpts, and epitomes).</p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="ref">What it is not</div>
+      <div class="prose">
+        <p>It is <strong>not</strong> a clean, continuous transcript of an ancient manuscript of Herodian.</p>
+        <p>Lentz’s Teubner text is a <strong>reconstruction</strong>: it attempts to re‑create a coherent “Herodian” by selecting, slicing, and re‑arranging material from multiple witnesses, and by inserting parallel material (including from the Stephanus of Byzantium tradition) according to Lentz’s hypothesis about the work’s original structure.</p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="ref">Why overlaps can be misleading</div>
+      <div class="prose">
+        <p>Because the Lentz text incorporates (and reorganizes) material that also lives in Stephanus of Byzantium (and elsewhere), substantial overlap is expected.</p>
+        <p>So overlap on this site should not automatically be read as “independent evidence” that Stephanus copied a continuous Herodian text; in many places the overlap reflects the editorial reconstruction itself.</p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="ref">Further reading</div>
+      <div class="prose">
+        <ul>
+          <li>BMCR review noting the “idiosyncratic and arbitrary” character of Lentz’s reconstruction and its long influence: <a href="https://bmcr.brynmawr.edu/2019/2019.05.26/" target="_blank" rel="noopener">BMCR 2019.05.26</a></li>
+          <li>Oxford (DPhil) thesis summary describing Lentz’s approach as reconstructive rather than a presentation of surviving evidence: <a href="https://ora.ox.ac.uk/objects/uuid:14988220-7ce2-48b0-b61e-3dc8c64eb732" target="_blank" rel="noopener">ORA record</a></li>
+          <li>Bibliographic record for the Teubner volume: <a href="https://scaife.perseus.org/library/urn:cts:greekLit:tlg0087.tlg031.opp-grc1/" target="_blank" rel="noopener">Scaife / Perseus catalog entry</a></li>
+        </ul>
+        <p class="meta">If you quote or analyze passages from this site, cite Lentz’s edition explicitly and (when possible) track the passage back to the underlying source (epitome/fragment/Stephanus) rather than treating it as a single ancient witness.</p>
+      </div>
+    </div>
+    """.strip()
     return render_shell(title=title, body_html=body)
 
 
@@ -2047,6 +2138,13 @@ def main() -> None:
     site_title = _site_title("Prosodia Catholica (Herodian)")
     (out_dir / "index.html").write_text(
         render_index(title=site_title, stats=stats, lines=lines, top_overlap_by_line=top_overlap_by_line),
+        encoding="utf-8",
+    )
+
+    about_dir = out_dir / "about"
+    about_dir.mkdir(parents=True, exist_ok=True)
+    (about_dir / "lentz.html").write_text(
+        render_about_lentz(site_title=site_title),
         encoding="utf-8",
     )
 
