@@ -76,7 +76,11 @@ def summarize_one(client: OpenAI, *, model: str, greek_text: str) -> tuple[str, 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Summarize Herodian lines into short index labels.")
     parser.add_argument("--limit", type=int, default=25, help="Max lines to summarize (default: 25)")
-    parser.add_argument("--model", default="gpt-5-mini", help="OpenAI model name (default: gpt-5-mini)")
+    parser.add_argument(
+        "--model",
+        default="gpt-5.4-mini",
+        help="OpenAI model name (default: gpt-5.4-mini)",
+    )
     parser.add_argument("--delay", type=float, default=0.5, help="Delay between requests in seconds")
     args = parser.parse_args()
 
