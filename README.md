@@ -30,7 +30,7 @@ Write a script that:
 
 This repo includes a small PostgreSQL-backed pipeline to:
 - translate a few more lines per day with OpenAI (`gpt-5.2` by default)
-- summarize passages into short index labels with OpenAI (`gpt-5.4-mini` by default)
+- summarize passages into short index labels with OpenAI (`gpt-5.6-luna` by default)
 - compute overlaps vs Stephanos (Meineke) into `stephanos_overlap_*`
 - generate a static website into `site/`
 - deploy it to `merah:/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs`

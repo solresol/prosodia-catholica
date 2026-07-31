@@ -78,8 +78,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=25, help="Max lines to summarize (default: 25)")
     parser.add_argument(
         "--model",
-        default="gpt-5.4-mini",
-        help="OpenAI model name (default: gpt-5.4-mini)",
+        default="gpt-5.6-luna",
+        help="OpenAI model name (default: gpt-5.6-luna)",
     )
     parser.add_argument("--delay", type=float, default=0.5, help="Delay between requests in seconds")
     args = parser.parse_args()
