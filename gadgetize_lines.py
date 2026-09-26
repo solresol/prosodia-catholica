@@ -112,6 +112,7 @@ def generate_one(
         ],
         tools=[GADGET_TOOL],
         tool_choice={"type": "function", "function": {"name": "generate_gadget"}},
+        reasoning_effort="none",
         temperature=0.2,
     )
 
@@ -134,7 +135,7 @@ def main() -> None:
         description="Generate one (or a few) small HTML/CSS/JS gadgets for Herodian passages."
     )
     parser.add_argument("--limit", type=int, default=1, help="Max gadgets to generate (default: 1)")
-    parser.add_argument("--model", default="gpt-5.2", help="OpenAI model name (default: gpt-5.2)")
+    parser.add_argument("--model", default="gpt-6-sol", help="OpenAI model name (default: gpt-6-sol)")
     parser.add_argument("--delay", type=float, default=0.0, help="Delay between requests in seconds")
     args = parser.parse_args()
 

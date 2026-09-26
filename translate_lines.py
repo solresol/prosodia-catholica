@@ -62,6 +62,7 @@ def translate_one(client: OpenAI, *, model: str, greek_text: str) -> tuple[str, 
         ],
         tools=[TRANSLATE_TOOL],
         tool_choice={"type": "function", "function": {"name": "translate_line"}},
+        reasoning_effort="none",
         temperature=0.2,
     )
 
@@ -78,7 +79,7 @@ def translate_one(client: OpenAI, *, model: str, greek_text: str) -> tuple[str, 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Translate a few more Herodian lines into English.")
     parser.add_argument("--limit", type=int, default=5, help="Max lines to translate (default: 5)")
-    parser.add_argument("--model", default="gpt-5.2", help="OpenAI model name (default: gpt-5.2)")
+    parser.add_argument("--model", default="gpt-6-sol", help="OpenAI model name (default: gpt-6-sol)")
     parser.add_argument("--delay", type=float, default=1.0, help="Delay between requests in seconds")
     args = parser.parse_args()
 
@@ -158,4 +159,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -29,7 +29,7 @@ Write a script that:
 ## Current pipeline (DB → translation → static site)
 
 This repo includes a small PostgreSQL-backed pipeline to:
-- translate a few more lines per day with OpenAI (`gpt-5.2` by default)
+- translate a few more lines per day with OpenAI (`gpt-6-sol` by default)
 - summarize passages into short index labels with OpenAI (`gpt-5.6-luna` by default)
 - compute overlaps vs Stephanos (Meineke) into `stephanos_overlap_*`
 - generate a static website into `site/`

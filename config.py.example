@@ -8,9 +8,9 @@ DB_USER = "herodian"
 DB_PASSWORD = "CHANGE_ME"
 
 # OpenAI
-OPENAI_MODEL = "gpt-5.2"
+OPENAI_MODEL = "gpt-6-sol"
 SUMMARY_MODEL = "gpt-5.6-luna"
-GADGET_MODEL = "gpt-5.2"
+GADGET_MODEL = "gpt-6-sol"
 
 # Deployment (used by run_daily_pipeline.sh)
 DEPLOY_HOST = "merah"
