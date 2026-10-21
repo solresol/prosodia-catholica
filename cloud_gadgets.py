@@ -29,16 +29,20 @@ def validate_bundle(bundle):
         candidate = item['candidate']
         if not candidate['html'].strip() or not candidate['js'].strip():
             raise ValueError('Empty gadget')
-        # Import lazily so offline bundle tests do not need DB configuration.
-        from gadgetize_lines import _validate_gadget
+        # Shared validation has no DB or model dependencies.
+        from gadget_validation import _validate_gadget
         _validate_gadget(**candidate)
 
 
 def main():
     parser = argparse.ArgumentParser(__doc__)
-    parser.add_argument('action', choices=['prepare', 'apply'])
+    parser.add_argument('action', choices=['prepare', 'validate', 'apply'])
     parser.add_argument('bundle', type=Path)
     args = parser.parse_args()
+    if args.action == 'validate':
+        validate_bundle(json.loads(args.bundle.read_text()))
+        print('validate: complete (no DB access)')
+        return
     from db import get_connection
     from psycopg2.extras import RealDictCursor
     conn = get_connection()
