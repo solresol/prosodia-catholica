@@ -1,0 +1,179 @@
+import copy
+from datetime import datetime
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import cloud_gadgets as gadgets
+import git_gadget_handoff as handoff
+
+
+def request():
+    def item(n, past=False):
+        return {'original': dict(id=n, ref=str(n), greek_text='α', english_translation='alpha', gadget_html='<input>' if past else None, gadget_css=None, gadget_js='void 0' if past else None), 'candidate': dict(html='<input>' if past else '', css='', js='void 0' if past else '')}
+    return {'day': gadgets.logical_day(), 'new': item(1), 'past': item(2, True)}
+
+
+def result(req):
+    res = copy.deepcopy(req)
+    for role in ('new', 'past'):
+        res[role]['candidate'] = dict(html='<input>', css='', js='void 0')
+        res[role]['test_evidence'] = dict(browser='Chromium', interaction='Greek input and empty/reset', expected='α', actual='α')
+    return res
+
+
+class FakeCursor:
+    def __init__(self, request, *, marker=None, changed=False, duplicate=False):
+        self.rows = {i['original']['id']: dict(i['original'], gadget_model=None, gadget_generated_at=None) for i in (request['new'], request['past'])}
+        if changed:
+            self.rows[1]['greek_text'] = 'edited'
+        if marker:
+            self.rows[1].update(gadget_html='<input>', gadget_css='', gadget_js='void 0', gadget_model=marker)
+        self.duplicate = duplicate
+        self.updates = []
+    def __enter__(self): return self
+    def __exit__(self, *args): pass
+    def execute(self, query, params=None):
+        self.query = query
+        self.params = params
+        if query.startswith('UPDATE'):
+            self.updates.append(params)
+    def fetchone(self):
+        if 'pg_try_advisory' in self.query: return (True,)
+        if 'FOR UPDATE' in self.query:
+            r = self.rows[self.params[0]]
+            return tuple(r[k] for k in (*gadgets.FIELDS, 'gadget_model', 'gadget_generated_at'))
+        if self.query.startswith('SELECT 1'): return (1,) if self.duplicate else None
+        raise AssertionError(self.query)
+
+
+class FakeConnection:
+    def __init__(self, cursor): self.c = cursor; self.committed = False
+    def __enter__(self): return self
+    def __exit__(self, typ, *args): self.committed = typ is None
+    def cursor(self): return self.c
+    def close(self): pass
+
+
+class HandoffTests(unittest.TestCase):
+    def test_sydney_dst_and_logical_midnight(self):
+        start, end = gadgets.day_bounds('2026-10-04')
+        self.assertEqual(end.timestamp() - start.timestamp(), 23*3600)
+        start, end = gadgets.day_bounds('2026-04-05')
+        self.assertEqual(end.timestamp() - start.timestamp(), 25*3600)
+        with patch.object(gadgets, 'datetime') as dt:
+            dt.now.return_value = datetime(2026, 10, 23, 0, 15, tzinfo=gadgets.SYDNEY)
+            self.assertEqual(gadgets.logical_day(), '2026-10-23')
+            dt.now.assert_called_once_with(gadgets.SYDNEY)
+
+    def test_claim_immutable_result_and_fields(self):
+        req = request()
+        record, _ = handoff.enqueue(None, req)
+        record, _ = handoff.claim(record, 'opaque-worker')
+        with self.assertRaises(RuntimeError): handoff.claim(record, 'another-worker')
+        res = result(req)
+        record, _ = handoff.submit(record, 'opaque-worker', res)
+        handoff.submit(record, 'opaque-worker', res)
+        altered = copy.deepcopy(res)
+        altered['new']['candidate']['css'] = 'body{}'
+        with self.assertRaises(RuntimeError): handoff.submit(record, 'opaque-worker', altered)
+        altered = copy.deepcopy(res)
+        altered['new']['original']['greek_text'] = 'changed'
+        with self.assertRaises(ValueError): gadgets.validate_result(req, altered)
+        altered = copy.deepcopy(req)
+        altered['secret'] = 'do not transmit'
+        with self.assertRaises(ValueError): gadgets.check_bundle(altered)
+
+    def test_apply_atomic_checks_and_commit_ack_recovery(self):
+        req = request(); res = result(req)
+        cursor = FakeCursor(req); conn = FakeConnection(cursor)
+        self.assertEqual(gadgets.apply(conn, req, res), 'imported')
+        self.assertTrue(conn.committed)
+        self.assertEqual(len(cursor.updates), 1)  # unchanged past gadget preserved
+        for flags in ({'changed': True}, {'duplicate': True}):
+            cursor = FakeCursor(req, **flags); conn = FakeConnection(cursor)
+            with self.assertRaises(RuntimeError): gadgets.apply(conn, req, res)
+            self.assertFalse(conn.committed)
+            self.assertFalse(cursor.updates)
+        cursor = FakeCursor(req, marker='codex-cloud:'+gadgets.digest(req))
+        conn = FakeConnection(cursor)
+        self.assertEqual(gadgets.apply(conn, req, res), 'already-imported')
+        self.assertFalse(cursor.updates)
+        record, _ = handoff.enqueue(None, req)
+        record, _ = handoff.claim(record, 'worker')
+        record, _ = handoff.submit(record, 'worker', res)
+        record, outcome = handoff.import_result(record, lambda: conn)
+        self.assertEqual(record['ack'], gadgets.digest(res))
+        self.assertEqual(outcome, 'already-imported')
+        _, outcome = handoff.import_result(record, lambda: self.fail('acknowledged import must not access DB'))
+        self.assertEqual(outcome, 'already-acknowledged')
+
+    def test_public_snapshot_gate_and_post_midnight_ack(self):
+        req = request()
+        class Cursor(FakeCursor):
+            def fetchall(self):
+                return [tuple(self.rows[n][k] for k in gadgets.FIELDS) for n in (1, 2)]
+        c = Cursor(req)
+        published = [req[r]['original'] for r in ('new', 'past')]
+        bundle = gadgets.prepare(FakeConnection(c), published)
+        self.assertEqual(bundle['new']['original'], published[0])
+        changed_public = copy.deepcopy(published)
+        changed_public[0]['english_translation'] = 'not the DB text'
+        with self.assertRaises(ValueError): gadgets.prepare(FakeConnection(c), changed_public)
+        res = result(req)
+        with patch.object(gadgets, 'logical_day', return_value='2099-01-01'):
+            c = FakeCursor(req, marker='codex-cloud:'+gadgets.digest(req))
+            self.assertEqual(gadgets.apply(FakeConnection(c), req, res), 'already-imported')
+            c = FakeCursor(req)
+            with self.assertRaises(RuntimeError): gadgets.apply(FakeConnection(c), req, res)
+            self.assertFalse(c.updates)
+
+    def test_rehearsal_never_accesses_import_db(self):
+        req = request()
+        record, _ = handoff.enqueue(None, req, rehearsal=True)
+        record, _ = handoff.claim(record, 'worker')
+        record, _ = handoff.submit(record, 'worker', result(req))
+        with self.assertRaises(RuntimeError):
+            handoff.import_result(record, lambda: self.fail('Rehearsal must not access DB'))
+        self.assertIsNone(record['ack'])
+
+    def test_git_roundtrip_and_racing_claim(self):
+        with tempfile.TemporaryDirectory() as d:
+            bare = Path(d) / 'remote.git'
+            subprocess.run(['git', 'init', '-q', '--bare', str(bare)], check=True)
+            env = dict(os.environ, GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@example.invalid', GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@example.invalid')
+            with patch.dict(os.environ, env):
+                queue = handoff.GitQueue(str(bare))
+                req = request()
+                queue.transact(lambda r: handoff.enqueue(r, req))
+                # Second worker wins between first worker's read and push.
+                raced = False
+                def race(record):
+                    nonlocal raced
+                    if not raced:
+                        raced = True
+                        handoff.GitQueue(str(bare)).transact(lambda r: handoff.claim(r, 'winner'))
+                    return handoff.claim(record, 'loser')
+                with self.assertRaises(RuntimeError): queue.transact(race)
+                claimed = queue.transact(lambda r: handoff.claim(r, 'winner'))
+                self.assertEqual(claimed, req)
+                res = result(req)
+                queue.transact(lambda r: handoff.submit(r, 'winner', res))
+                queue.transact(lambda r: handoff.import_result(r, lambda: FakeConnection(FakeCursor(req))))
+                state = queue.transact(lambda r: (r, r))
+                self.assertEqual(state['ack'], gadgets.digest(res))
+                # Re-enqueue preserves exactly the original randomly assigned work.
+                other = request(); other['new']['original']['id'] = 99
+                self.assertEqual(queue.transact(lambda r: handoff.enqueue(r, other)), req)
+                names = subprocess.check_output(['git', '--git-dir', str(bare), 'ls-tree', '-r', '--name-only', handoff.BRANCH], text=True).splitlines()
+                self.assertEqual(names, ['handoff/'+gadgets.logical_day()+'.json'])
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,99 +1,158 @@
-"""Export a small daily work bundle; atomically publish tested Codex edits.
-
-No model API calls, schema changes, or deployment. JSON bundles stay in exports/.
-"""
+"""Bounded public gadget bundles. Database operations run only on Raksasa."""
 from __future__ import annotations
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta
+import hashlib
 import json
 from pathlib import Path
 import secrets
+from zoneinfo import ZoneInfo
+from gadget_validation import _validate_gadget
 
+SYDNEY = ZoneInfo('Australia/Sydney')
 FIELDS = ('id', 'ref', 'greek_text', 'english_translation', 'gadget_html', 'gadget_css', 'gadget_js')
+PARTS = ('html', 'css', 'js')
+
+
+def logical_day():
+    return datetime.now(SYDNEY).date().isoformat()
+
+
+def day_bounds(day):
+    start = datetime.combine(datetime.fromisoformat(day).date(), time(), SYDNEY)
+    return start, start + timedelta(days=1)
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def check_bundle(bundle, *, tested=False, current=True):
+    if set(bundle) != {'day', 'new', 'past'} or (current and bundle['day'] != logical_day()):
+        raise ValueError('Bundle must be from today in Australia/Sydney')
+    day_bounds(bundle['day'])
+    if bundle['new'] is None:
+        raise ValueError('No new candidate')
+    for role in ('new', 'past'):
+        item = bundle[role]
+        if item is None:
+            continue
+        if set(item) != ({'original', 'candidate', 'test_evidence'} if tested else {'original', 'candidate'}):
+            raise ValueError('Unexpected bundle fields')
+        row = item['original']
+        if set(row) != set(FIELDS) or type(row['id']) is not int:
+            raise ValueError('Unexpected passage fields')
+        for key in FIELDS[1:]:
+            if row[key] is not None and (not isinstance(row[key], str) or len(row[key]) > 64000):
+                raise ValueError('Passage field too large or not text')
+        c = item['candidate']
+        if set(c) != set(PARTS) or any(not isinstance(c[k], str) or len(c[k]) > 64000 for k in PARTS):
+            raise ValueError('Unexpected candidate fields or size')
+        if tested:
+            evidence = item['test_evidence']
+            if set(evidence) != {'browser', 'interaction', 'expected', 'actual'} or any(not isinstance(v, str) or not v.strip() or len(v) > 2000 for v in evidence.values()):
+                raise ValueError('Bounded browser and behavioral evidence required')
+            if evidence['expected'] != evidence['actual']:
+                raise ValueError('Expected/actual mismatch')
+            if not c['html'].strip() or not c['js'].strip():
+                raise ValueError('Empty gadget')
+            _validate_gadget(**c)
+    if bundle['past'] and bundle['past']['original']['id'] == bundle['new']['original']['id']:
+        raise ValueError('New and past must differ')
+    if bundle['new']['original']['gadget_html'] is not None:
+        raise ValueError('New passage already has a gadget')
+    if bundle['past'] and bundle['past']['original']['gadget_html'] is None:
+        raise ValueError('Past passage has no gadget')
+    if len(json.dumps(bundle).encode()) > 512000:
+        raise ValueError('Bundle exceeds 512KB')
 
 
 def validate_bundle(bundle):
-    if bundle['day'] != datetime.now(timezone.utc).date().isoformat():
-        raise ValueError('Bundle is not from today (UTC); prepare again')
+    check_bundle(bundle, tested=True)
+
+
+def validate_result(request, result, *, current=True):
+    check_bundle(request, current=current)
+    check_bundle(result, tested=True, current=current)
     for role in ('new', 'past'):
-        item = bundle.get(role)
-        if item is None:
-            if role == 'new':
-                raise ValueError('No new candidate')
-            continue
-        evidence = item.get('test_evidence', {})
-        if not all(evidence.get(k) for k in ('browser', 'interaction', 'expected', 'actual')):
-            raise ValueError(f'{role}: browser and behavioral evidence required')
-        if evidence['expected'] != evidence['actual']:
-            raise ValueError(f'{role}: expected/actual mismatch')
-        candidate = item['candidate']
-        if not candidate['html'].strip() or not candidate['js'].strip():
-            raise ValueError('Empty gadget')
-        # Shared validation has no DB or model dependencies.
-        from gadget_validation import _validate_gadget
-        _validate_gadget(**candidate)
+        if (request[role] is None) != (result[role] is None):
+            raise ValueError('Result changed assigned passages')
+        if request[role] and request[role]['original'] != result[role]['original']:
+            raise ValueError('Result changed original snapshot')
+
+
+def prepare(conn, published, *, rehearsal=False):
+    # Only queue snapshots already present in the existing site publication.
+    public = {r['id']: {k: r[k] for k in FIELDS} for r in published}
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '10s'")
+            cur.execute('SELECT 1 FROM cathpros_lines WHERE gadget_generated_at >= %s AND gadget_generated_at < %s LIMIT 1', day_bounds(logical_day()))
+            if cur.fetchone() and not rehearsal:
+                raise RuntimeError('A gadget already generated this Sydney day; no duplicate queue')
+            cur.execute('SELECT ' + ', '.join(FIELDS) + " FROM cathpros_lines WHERE english_translation IS NOT NULL AND greek_text IS NOT NULL AND ref <> 'E' AND COALESCE(ref_major,1) <> 0 ORDER BY gadget_attempts, id")
+            rows = [dict(zip(FIELDS, row)) for row in cur.fetchall()]
+    eligible = [r for r in rows if public.get(r['id']) == r]
+    new = next((r for r in eligible if r['gadget_html'] is None), None)
+    past = [r for r in eligible if r['gadget_html'] is not None]
+    def wrap(row):
+        return None if row is None else {'original': row, 'candidate': {k: row['gadget_'+k] or '' for k in PARTS}}
+    bundle = {'day': logical_day(), 'new': wrap(new), 'past': wrap(secrets.choice(past)) if past else None}
+    check_bundle(bundle)
+    return bundle
+
+
+def apply(conn, request, result):
+    validate_result(request, result, current=False)
+    marker = 'codex-cloud:' + digest(request)
+    start, end = day_bounds(request['day'])
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '10s'")
+            cur.execute("SET LOCAL lock_timeout = '2s'")
+            cur.execute('SELECT pg_try_advisory_xact_lock(18482, 716)')
+            if not cur.fetchone()[0]:
+                raise RuntimeError('Another cloud import is running')
+            # Lock in ID order; inspect the marker to recover a commit-before-ack crash.
+            current = {}
+            items = [result[r] for r in ('new', 'past') if result[r]]
+            for item in sorted(items, key=lambda i: i['original']['id']):
+                cur.execute('SELECT ' + ', '.join(FIELDS) + ', gadget_model, gadget_generated_at FROM cathpros_lines WHERE id=%s FOR UPDATE', (item['original']['id'],))
+                row = cur.fetchone()
+                if row is None:
+                    raise RuntimeError('Passage disappeared')
+                current[item['original']['id']] = dict(zip((*FIELDS, 'gadget_model', 'gadget_generated_at'), row))
+            def matches(item):
+                r = current[item['original']['id']]
+                return all(r[k] == item['original'][k] for k in ('id', 'ref', 'greek_text', 'english_translation')) and all((r['gadget_'+k] or '') == item['candidate'][k] for k in PARTS)
+            new = result['new']
+            nr = current[new['original']['id']]
+            if nr['gadget_model'] == marker:
+                if not all(matches(i) for i in items):
+                    raise RuntimeError('Previously imported data was subsequently edited; inspect manually')
+                return 'already-imported'
+            if request['day'] != logical_day():
+                raise RuntimeError('Stale Sydney day: only acknowledgement recovery is allowed')
+            cur.execute('SELECT 1 FROM cathpros_lines WHERE gadget_generated_at >= %s AND gadget_generated_at < %s LIMIT 1', (start, end))
+            if cur.fetchone():
+                raise RuntimeError('A gadget already generated this Sydney day; inspect legacy/cloud overlap')
+            for item in items:
+                row = current[item['original']['id']]
+                if {k: row[k] for k in FIELDS} != item['original']:
+                    raise RuntimeError('Passage changed since prepare; refusing overwrite')
+                c = item['candidate']
+                if item is new or any(c[k] != (row['gadget_'+k] or '') for k in PARTS):
+                    cur.execute('UPDATE cathpros_lines SET gadget_html=%s, gadget_css=%s, gadget_js=%s, gadget_generated_at=now(), gadget_model=%s, gadget_error=NULL, gadget_last_attempted_at=now(), gadget_attempts=gadget_attempts+1 WHERE id=%s', (c['html'], c['css'], c['js'], marker, row['id']))
+    return 'imported'
 
 
 def main():
     parser = argparse.ArgumentParser(__doc__)
-    parser.add_argument('action', choices=['prepare', 'validate', 'apply'])
+    parser.add_argument('action', choices=['validate'])
     parser.add_argument('bundle', type=Path)
     args = parser.parse_args()
-    if args.action == 'validate':
-        validate_bundle(json.loads(args.bundle.read_text()))
-        print('validate: complete (no DB access)')
-        return
-    from db import get_connection
-    from psycopg2.extras import RealDictCursor
-    conn = get_connection()
-    try:
-        with conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SET LOCAL statement_timeout = '10s'")
-                cur.execute("SET LOCAL lock_timeout = '2s'")
-                # Same lock across cloud workers; transaction contains no model/browser waits.
-                cur.execute('SELECT pg_try_advisory_xact_lock(18482, 716) AS locked')
-                if not cur.fetchone()['locked']:
-                    raise RuntimeError('Another cloud publish is running')
-                cur.execute("SELECT 1 FROM cathpros_lines WHERE gadget_generated_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' LIMIT 1")
-                if cur.fetchone():
-                    raise RuntimeError('A gadget was already generated today; do not duplicate')
-                if args.action == 'prepare':
-                    if args.bundle.exists():
-                        raise RuntimeError('Refusing to overwrite existing work bundle')
-                    columns = ', '.join(FIELDS)
-                    cur.execute(f"SELECT {columns} FROM cathpros_lines WHERE gadget_html IS NULL AND english_translation IS NOT NULL AND greek_text IS NOT NULL AND ref <> 'E' AND COALESCE(ref_major,1) <> 0 ORDER BY gadget_attempts, id LIMIT 1")
-                    new = cur.fetchone()
-                    # Small corpus (~544 rows); avoid ORDER BY random().
-                    cur.execute('SELECT id FROM cathpros_lines WHERE gadget_html IS NOT NULL ORDER BY id')
-                    ids = [r['id'] for r in cur.fetchall()]
-                    past = None
-                    if ids:
-                        cur.execute(f'SELECT {columns} FROM cathpros_lines WHERE id = %s', (secrets.choice(ids),))
-                        past = cur.fetchone()
-                    def wrap(row):
-                        return None if row is None else {'original': dict(row), 'candidate': dict(zip(('html','css','js'), (row[k] or '' for k in ('gadget_html','gadget_css','gadget_js'))))}
-                    bundle = {'day': datetime.now(timezone.utc).date().isoformat(), 'new': wrap(new), 'past': wrap(past)}
-                    args.bundle.parent.mkdir(parents=True, exist_ok=True)
-                    with args.bundle.open('x') as f:
-                        json.dump(bundle, f, ensure_ascii=False, indent=2)
-                else:
-                    bundle = json.loads(args.bundle.read_text())
-                    validate_bundle(bundle)
-                    for role in ('new', 'past'):
-                        item = bundle.get(role)
-                        if item is None:
-                            continue
-                        original = item['original']
-                        cur.execute('SELECT ' + ', '.join(FIELDS) + ' FROM cathpros_lines WHERE id = %s FOR UPDATE', (original['id'],))
-                        if dict(cur.fetchone() or {}) != original:
-                            raise RuntimeError('Passage changed since prepare; refusing overwrite')
-                        c = item['candidate']
-                        if role == 'new' or any(c[k] != (original['gadget_'+k] or '') for k in ('html','css','js')):
-                            cur.execute("UPDATE cathpros_lines SET gadget_html=%s, gadget_css=%s, gadget_js=%s, gadget_generated_at=now(), gadget_model='codex-cloud', gadget_error=NULL, gadget_last_attempted_at=now(), gadget_attempts=gadget_attempts+1 WHERE id=%s", (c['html'], c['css'], c['js'], original['id']))
-        print(f'{args.action}: complete')
-    finally:
-        conn.close()
+    validate_bundle(json.loads(args.bundle.read_text()))
+    print('validate: complete (no DB access)')
 
 
 if __name__ == '__main__':

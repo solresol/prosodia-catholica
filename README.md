@@ -70,6 +70,11 @@ The site is generated as:
 
 ### Daily cron (raksasa)
 
+A cloud gadget / local maintenance and publisher split is staged but **not active**.
+See [handoff design, operational setup and exact cloud prompt](docs/cloud-gadget-workflow.md).
+Translation, summaries and overlap computation remain local in the staged design.
+
+
 Install the daily pipeline:
 - `./setup_cron.sh`
 

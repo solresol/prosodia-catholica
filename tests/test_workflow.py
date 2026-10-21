@@ -1,5 +1,4 @@
 import copy
-from datetime import datetime, timezone
 import os
 from pathlib import Path
 import subprocess
@@ -14,8 +13,8 @@ import cloud_gadgets
 
 class WorkflowTests(unittest.TestCase):
     def test_evidence_and_stale_bundle(self):
-        item = {'candidate': {'html': '<input>', 'css': '', 'js': 'void 0'}, 'test_evidence': {'browser': 'Chromium', 'interaction': 'type alpha', 'expected': 'alpha', 'actual': 'alpha'}}
-        bundle = {'day': datetime.now(timezone.utc).date().isoformat(), 'new': item, 'past': None}
+        item = {'original': dict(id=1, ref='1.1', greek_text='α', english_translation='alpha', gadget_html=None, gadget_css=None, gadget_js=None), 'candidate': {'html': '<input>', 'css': '', 'js': 'void 0'}, 'test_evidence': {'browser': 'Chromium', 'interaction': 'type alpha', 'expected': 'alpha', 'actual': 'alpha'}}
+        bundle = {'day': cloud_gadgets.logical_day(), 'new': item, 'past': None}
         cloud_gadgets.validate_bundle(bundle)
         bad = copy.deepcopy(bundle)
         bad['new']['test_evidence']['actual'] = 'wrong'
@@ -27,7 +26,8 @@ class WorkflowTests(unittest.TestCase):
 
     def test_validate_cli_needs_no_db_or_model_configuration(self):
         import json
-        bundle = {'day': datetime.now(timezone.utc).date().isoformat(), 'new': {
+        bundle = {'day': cloud_gadgets.logical_day(), 'new': {
+            'original': dict(id=1, ref='1.1', greek_text='α', english_translation='alpha', gadget_html=None, gadget_css=None, gadget_js=None),
             'candidate': {'html': '<input>', 'css': '', 'js': 'void 0'},
             'test_evidence': {'browser': 'Chromium', 'interaction': 'type', 'expected': 'ok', 'actual': 'ok'}}, 'past': None}
         with tempfile.TemporaryDirectory() as d:
@@ -90,14 +90,18 @@ class WorkflowTests(unittest.TestCase):
                 p.chmod(0o755)
             (root / 'site').mkdir()
             (root / 'site/index.html').write_text('site')
+            (root / 'site/passages.json').write_text('[]')
             env = dict(os.environ, TEST_BIN=str(binary))
             ok = subprocess.run(['bash', str(script)], env=env, capture_output=True)
             self.assertEqual((ok.returncode, ok.stdout, ok.stderr), (0, b'', b''))
+            self.assertEqual((root / 'logs/published-passages.json').read_text(), '[]')
+            (root / 'site/passages.json').write_text('[1]')
             for name, code in [('BUILD_STATUS', '23'), ('RSYNC_STATUS', '24')]:
                 failed = subprocess.run(['bash', str(script)], env=dict(env, **{name: code}), capture_output=True)
                 self.assertEqual(failed.returncode, int(code))
                 self.assertIn(b'build-diagnostic', failed.stderr)
                 self.assertIn(b'Site publish failed', failed.stderr)
+                self.assertEqual((root / 'logs/published-passages.json').read_text(), '[]')
             self.assertEqual(len(list((root / 'logs').glob('*.log'))), 2)
 
 

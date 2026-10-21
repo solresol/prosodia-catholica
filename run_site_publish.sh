@@ -34,5 +34,9 @@ publish() {
   test "$DEPLOY_PATH" = /var/www/vhosts/prosodia-catholica.symmachus.org/htdocs
   test -s site/index.html
   rsync -az --delete site/ "${DEPLOY_HOST}:${DEPLOY_PATH}/"
+  # Only a successful deployment advances the public-data handoff baseline.
+  snapshot=$(mktemp logs/published-passages.XXXXXXXX.json)
+  cp site/passages.json "$snapshot"
+  mv -f "$snapshot" logs/published-passages.json
 }
 publish >"$log" 2>&1
