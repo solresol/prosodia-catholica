@@ -20,7 +20,7 @@ class WorkflowTests(unittest.TestCase):
         bad['new']['test_evidence']['actual'] = 'wrong'
         with self.assertRaises(ValueError):
             cloud_gadgets.validate_bundle(bad)
-        bundle['day'] = '2000-01-01'
+        bundle['day'] = '2999-01-01'
         with self.assertRaises(ValueError):
             cloud_gadgets.validate_bundle(bundle)
 
@@ -80,7 +80,7 @@ class WorkflowTests(unittest.TestCase):
             binary.mkdir()
             commands = {
                 'git': '#!/bin/sh\ncase "$1" in\nstatus) exit 0;;\nremote) echo git@github.com:solresol/prosodia-catholica.git;;\npull) echo pulled;;\nesac\n',
-                'uv': '#!/bin/sh\necho build-diagnostic\nexit "${BUILD_STATUS:-0}"\n',
+                'uv': '#!/bin/sh\ncase "$*" in *git_gadget_handoff.py*) echo handoff-diagnostic; exit "${HANDOFF_STATUS:-0}";; esac\necho build-diagnostic\nexit "${BUILD_STATUS:-0}"\n',
                 'python3': '#!/bin/sh\ncase "$2" in\n*DEPLOY_HOST*) echo merah;;\n*) echo /var/www/vhosts/prosodia-catholica.symmachus.org/htdocs;;\nesac\n',
                 'rsync': '#!/bin/sh\necho deployed\nexit "${RSYNC_STATUS:-0}"\n',
             }
@@ -96,13 +96,18 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual((ok.returncode, ok.stdout, ok.stderr), (0, b'', b''))
             self.assertEqual((root / 'logs/published-passages.json').read_text(), '[]')
             (root / 'site/passages.json').write_text('[1]')
-            for name, code in [('BUILD_STATUS', '23'), ('RSYNC_STATUS', '24')]:
+            for name, code in [('BUILD_STATUS', '23'), ('RSYNC_STATUS', '24'), ('HANDOFF_STATUS', '25')]:
                 failed = subprocess.run(['bash', str(script)], env=dict(env, **{name: code}), capture_output=True)
                 self.assertEqual(failed.returncode, int(code))
                 self.assertIn(b'build-diagnostic', failed.stderr)
                 self.assertIn(b'Site publish failed', failed.stderr)
-                self.assertEqual((root / 'logs/published-passages.json').read_text(), '[]')
-            self.assertEqual(len(list((root / 'logs').glob('*.log'))), 2)
+                if name == 'HANDOFF_STATUS':
+                    self.assertEqual((root / 'logs/published-passages.json').read_text(), '[1]')
+                    self.assertIn(b'deployed', failed.stderr)
+                    self.assertIn(b'handoff-diagnostic', failed.stderr)
+                else:
+                    self.assertEqual((root / 'logs/published-passages.json').read_text(), '[]')
+            self.assertEqual(len(list((root / 'logs').glob('*.log'))), 3)
 
 
 if __name__ == '__main__':

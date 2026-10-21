@@ -27,10 +27,12 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def check_bundle(bundle, *, tested=False, current=True):
+def check_bundle(bundle, *, tested=False, current=False):
     if set(bundle) != {'day', 'new', 'past'} or (current and bundle['day'] != logical_day()):
-        raise ValueError('Bundle must be from today in Australia/Sydney')
+        raise ValueError('Invalid bundle fields or requested current Sydney day')
     day_bounds(bundle['day'])
+    if bundle['day'] > logical_day():
+        raise ValueError('Future Sydney day')
     if bundle['new'] is None:
         raise ValueError('No new candidate')
     for role in ('new', 'past'):
@@ -71,7 +73,7 @@ def validate_bundle(bundle):
     check_bundle(bundle, tested=True)
 
 
-def validate_result(request, result, *, current=True):
+def validate_result(request, result, *, current=False):
     check_bundle(request, current=current)
     check_bundle(result, tested=True, current=current)
     for role in ('new', 'past'):
@@ -98,14 +100,14 @@ def prepare(conn, published, *, rehearsal=False):
     def wrap(row):
         return None if row is None else {'original': row, 'candidate': {k: row['gadget_'+k] or '' for k in PARTS}}
     bundle = {'day': logical_day(), 'new': wrap(new), 'past': wrap(secrets.choice(past)) if past else None}
-    check_bundle(bundle)
+    check_bundle(bundle, current=True)
     return bundle
 
 
 def apply(conn, request, result):
     validate_result(request, result, current=False)
     marker = 'codex-cloud:' + digest(request)
-    start, end = day_bounds(request['day'])
+    start, end = day_bounds(logical_day())
     with conn:
         with conn.cursor() as cur:
             cur.execute("SET LOCAL statement_timeout = '10s'")
@@ -131,8 +133,6 @@ def apply(conn, request, result):
                 if not all(matches(i) for i in items):
                     raise RuntimeError('Previously imported data was subsequently edited; inspect manually')
                 return 'already-imported'
-            if request['day'] != logical_day():
-                raise RuntimeError('Stale Sydney day: only acknowledgement recovery is allowed')
             cur.execute('SELECT 1 FROM cathpros_lines WHERE gadget_generated_at >= %s AND gadget_generated_at < %s LIMIT 1', (start, end))
             if cur.fetchone():
                 raise RuntimeError('A gadget already generated this Sydney day; inspect legacy/cloud overlap')

@@ -27,8 +27,8 @@ limits evidence to four strings of at most 2,000 characters each per gadget and
 rejects unknown fields; each text/source field is limited to 64,000 characters,
 each bundle to 512KB. These bounds/allowlists are not a secret detector: Codex
 must inspect the actual evidence before submit. Git retains historical records.
-No live bundle has been transmitted yet. Only code/docs/tests are pushed on the
-staged implementation branch. No data-sharing approval gap identified for this
+One verified public rehearsal request has been transmitted to gadget-handoff;
+source code/docs/tests remain on the staged implementation branch. No data-sharing approval gap identified for this
 strictly public/intended-for-publication payload.
 
 ## Data flow and concurrency
@@ -50,7 +50,9 @@ If absent, stop and report; do not add keys or grants.
 2. Raksasa `enqueue` reads the DB and last successful public snapshot, selects one
    pending passage and one uniformly random existing gadget from matching public
    rows, and pushes a bounded request. Re-enqueue returns the existing request;
-   it never changes the chosen past gadget. The small corpus is read locally.
+   it never changes the chosen past gadget. If older production work is pending,
+   enqueue resumes it instead of creating a conflicting daily request. The small
+   corpus is read locally.
 3. Cloud `claim` pushes a unique opaque worker ID before starting browser work.
    Another worker cannot claim that day. A retry of the same still-running job
    uses its saved worker ID. Claims never expire automatically. A stopped worker
@@ -69,9 +71,16 @@ If absent, stop and report; do not add keys or grants.
    after acknowledgement makes no DB connection. If commit succeeded but the ack
    push failed, retry checks `gadget_model = codex-cloud:SHA256(request)` and all
    gadget/source content before acknowledging, without another write. This can
-   recover a prior day's acknowledgement via `import --day YYYY-MM-DD`; an old
-   unimported result is refused. Subsequent edits require manual inspection.
-7. Raksasa builds/publishes from the production DB using existing rsync rights.
+   recover a prior day's acknowledgement via `import --day YYYY-MM-DD`. Late
+   unimported results remain eligible when their original row snapshots still
+   match; subsequent edits cause an explicit stale-edit failure.
+7. Every staged site rebuild first invokes `import-ready`, selecting the oldest
+   pending production request across Sydney days. Missing/not-yet-tested results
+   are normal and cause no DB connection or failure. Actual import errors remain
+   visible/nonzero but site generation and publication still proceed with the
+   last tested DB state. After a late result arrives, any subsequent rebuild
+   imports it; pending requests are neither expired at midnight nor overwritten.
+   Raksasa then builds/publishes using existing rsync rights.
 
 All branch mutations use isolated temporary checkouts and normal guarded
 fast-forward pushes; there are no force pushes or rebases. A push race reloads
@@ -99,6 +108,9 @@ flock, rsync and merah SSH/destination rights. No new credentials or permissions
    This is allowed after the legacy generator ran, because rehearsal records can
    never import into the DB. The production daily duplicate guard remains intact.
 3. Parent launches the cloud prompt below using existing GitHub auth and a browser.
+   For the prepared rehearsal, pass `--day 2026-10-22` explicitly to claim/status;
+   submit derives the assigned day from the bundle (explicit matching --day also
+   works). Use the latest staged source revision, not the default main branch.
    Cloud `claim` and `submit` create the round trip on the data branch. Local
    `uv run --frozen git_gadget_handoff.py status` must show mode rehearsal and
    result true; inspect its actual browser evidence and submitted code. No import
@@ -113,33 +125,55 @@ flock, rsync and merah SSH/destination rights. No new credentials or permissions
    If it fails, stop the cloud schedule and restore old cron before the next due
    run, checking the day's import marker first to avoid a second gadget.
 
-Suggested final cadence, **all Australia/Sydney**, adjusting only after measuring
-cloud runtime (no UTC constants; DST follows Sydney):
+Recommended final cadence, **all Australia/Sydney** (not installed):
 
 - 00:05 local maintenance then enqueue from the previous successful public export.
   Newly translated lines become eligible after the next successful publication.
 - 00:30 daily cloud job, configured with timezone Australia/Sydney.
-- 01:10 local import; a missing/late result is a visible nonzero failure.
-- 01:15 existing local publication time, now build/publish only.
+- 04:15 local import-ready/build/publish. This gives the cloud 3h45m rather than
+  treating the original 01:10 as a deadline. It does not add another heavy build.
+
+If retaining the established 01:15 publication time is preferable, it is safe:
+that is the first import opportunity, **not** an expiry. A late result imports on
+its next rebuild, including the following day. Optional/manual additional rebuilds
+can reduce latency. Cloud runs skip work already submitted and wait for import;
+new enqueue/claim commands resume the oldest unacknowledged production request
+rather than selecting a new passage while a prior job is pending. A stopped
+claimed worker still requires explicit recovery after verifying it is stopped.
 
 Proposed Herodian entries, **not installed** (server timezone verified Sydney):
 
 ```cron
 5 0 * * * cd /home/herodian/prosodia-catholica && ./run_content_maintenance.sh && ./run_handoff_local.sh enqueue
-10 1 * * * cd /home/herodian/prosodia-catholica && ./run_handoff_local.sh import
-15 1 * * * cd /home/herodian/prosodia-catholica && ./run_site_publish.sh
+15 4 * * * cd /home/herodian/prosodia-catholica && ./run_site_publish.sh
 ```
 
-Do not redirect these to /dev/null: wrappers are silent on success, retain and
-replay failed diagnostics and preserve exit status. flock overlaps return 75.
-Missing handoff/broken tests must not stop independent site rebuilding. For late
-results, retry **import only** during the same Sydney day, then publish; do not
-rerun maintenance automatically after partial completion. Maintenance retries can
-advance another translation batch because existing scripts commit incrementally.
-Unimported results expire at Sydney midnight, with an explicit stale failure.
-Sydney 00:05/00:30/01:10/01:15 are outside its DST transition hour;
-ack/idempotence and flock also protect against cron retries. No extra manual heavy overlap
-computation should compete with the ongoing migration.
+No separate timed importer is required: every rebuild includes repeatable
+`import-ready`. Explicit `run_handoff_local.sh import` remains available for manual
+checks. Do not redirect wrappers to /dev/null: they are silent on success, retain
+and replay failed diagnostics and preserve exit status. flock overlaps return 75.
+Late/missing results do not stop independent site rebuilding. A real import error
+is reported after publishing the previous tested DB state. Do not rerun maintenance
+automatically after partial completion: existing scripts commit incrementally.
+All dates and bounds use Australia/Sydney, including its 23/25-hour DST days.
+No extra manual heavy overlap computation should compete with the migration.
+
+## Prepared rehearsal evidence
+
+On 2026-10-22 Australia/Sydney, staged source was run in an isolated
+`/tmp/prosodia-git-rehearsal-20261022` checkout as Herodian. Production checkout,
+cron, generator and DB contents were not changed. The public HTTPS fetch received
+Cloudflare 1010; instead the exact configured deployed file was verified via the
+existing deployment SSH identity. Both deployed and local public exports have
+SHA-256 `e8669707a19b7c87e9df57ebd5a7d192c68e702654ee29e9ec77adf0d480981b`.
+That byte-identical snapshot was seeded only in the isolated checkout.
+
+Enqueued `refs/heads/gadget-handoff`, record `handoff/2026-10-22.json`, initial
+commit `01b614694e2f184bd2d42a994a76a360e0cdd290`. Mode is rehearsal, new passage
+241 (`1.244`), past gadget 68 (`1.71`), request SHA-256
+`8a3999798914cf2512cf319be2c5f6bb364129972c95811ac1eaf3644571c0d2`.
+Record size 46,325 bytes; no claim, result or ack existed after enqueue. Browser
+claim/test/submit are pending. Rehearsal mode prohibits production import.
 
 ## Exact cloud prompt
 
@@ -156,7 +190,11 @@ Run python3 -m unittest discover -s tests -v. Generate a unique opaque worker UU
 for this job attempt; save it in ignored exports/ so an in-job retry uses the same
 ID. Do not use a predictable daily worker ID shared by concurrent jobs. Compute
 DAY with python3 -c 'from cloud_gadgets import logical_day; print(logical_day())'.
-Claim with python3 git_gadget_handoff.py claim --worker WORKER_UUID --bundle
+Run python3 git_gadget_handoff.py status first. Resume its pending assignment day
+even if older than today; if it already has a result, report waiting for local
+import and stop without reauthoring. For the prepared rehearsal pass --day
+2026-10-22 to status and claim even after that day ends. Claim with
+python3 git_gadget_handoff.py claim --worker WORKER_UUID --bundle
 exports/gadgets-DAY.json, substituting actual values on one command line. Claim
 push must succeed before authoring. If another worker owns the day, stop; do not
 release or take over its claim. If no queue exists, report it and stop. Do not
@@ -204,12 +242,12 @@ access to unauthorized computers.
 
 Offline tests cover a real local bare-Git round trip and a racing claim, immutable
 results, bounded/unknown fields, published-snapshot equality, stale DB snapshots,
-daily duplicate guard, commit-before-ack recovery, prior-day acknowledgement-only
+daily duplicate guard, commit-before-ack recovery, late-result and prior-day acknowledgement
 recovery, rehearsal import refusal, Sydney 23/25-hour DST days, DB-free validation,
 maintenance preservation and quiet-success/error-reporting publisher behavior.
 DB checks use fakes, not production writes. Real cloud browser execution, cloud
-Git permissions, live Git queue/result round trip and production apply are still
-required. Source code push is not evidence of those actions succeeding.
+Git permissions, cloud Git claim/browser-test/result return and production apply are still
+required. The bounded rehearsal queue has now been pushed and verified. Source code push is not evidence of those actions succeeding.
 
 No production schedule, generator configuration, credentials, services or database
 schema have been changed. Existing rsync remains non-atomic; failed transfers may

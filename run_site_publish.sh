@@ -27,6 +27,10 @@ publish() {
   test -z "$(git status --porcelain)" || { echo 'Checkout must be clean'; return 1; }
   test "$(git remote get-url origin)" = 'git@github.com:solresol/prosodia-catholica.git' || return 1
   git pull --ff-only
+  # Pending results are normal. A real import error is reported but must not
+  # prevent rebuilding the last tested DB state.
+  handoff_status=0
+  uv run --frozen git_gadget_handoff.py import-ready || handoff_status=$?
   uv run --frozen generate_site.py --overlap-metric-version "${OVERLAP_METRIC_VERSION:-v1}"
   DEPLOY_HOST=$(python3 -c 'import config; print(config.DEPLOY_HOST)')
   DEPLOY_PATH=$(python3 -c 'import config; print(config.DEPLOY_PATH)')
@@ -38,5 +42,6 @@ publish() {
   snapshot=$(mktemp logs/published-passages.XXXXXXXX.json)
   cp site/passages.json "$snapshot"
   mv -f "$snapshot" logs/published-passages.json
+  return "$handoff_status"
 }
 publish >"$log" 2>&1

@@ -131,8 +131,42 @@ class HandoffTests(unittest.TestCase):
             c = FakeCursor(req, marker='codex-cloud:'+gadgets.digest(req))
             self.assertEqual(gadgets.apply(FakeConnection(c), req, res), 'already-imported')
             c = FakeCursor(req)
-            with self.assertRaises(RuntimeError): gadgets.apply(FakeConnection(c), req, res)
-            self.assertFalse(c.updates)
+            self.assertEqual(gadgets.apply(FakeConnection(c), req, res), 'imported')
+            self.assertEqual(len(c.updates), 1)
+
+    def test_delayed_pending_work_is_resumed_instead_of_overwritten(self):
+        with tempfile.TemporaryDirectory() as d:
+            bare = Path(d) / 'remote.git'
+            subprocess.run(['git', 'init', '-q', '--bare', str(bare)], check=True)
+            env = dict(os.environ, GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@example.invalid', GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@example.invalid')
+            req = request()
+            with patch.dict(os.environ, env):
+                handoff.GitQueue(str(bare)).transact(lambda r: handoff.enqueue(r, req))
+                with patch.object(gadgets, 'logical_day', return_value='2099-01-01'), patch.object(handoff, 'logical_day', return_value='2099-01-01'):
+                    queue = handoff.GitQueue(str(bare), pending=True)
+                    # Next day's enqueue receives the old record and must not query DB.
+                    old = queue.transact(lambda r: (r, r))
+                    self.assertEqual(old['request'], req)
+                    queue.transact(lambda r: handoff.claim(r, 'late-worker'))
+                    queue.transact(lambda r: handoff.submit(r, 'late-worker', result(req)))
+                    outcome = queue.transact(lambda r: handoff.import_result(r, lambda: FakeConnection(FakeCursor(req))))
+                    self.assertEqual(outcome, 'imported')
+                    state = handoff.GitQueue(str(bare), day=req['day']).transact(lambda r: (r, r))
+                    self.assertIsNotNone(state['ack'])
+                    names = subprocess.check_output(['git', '--git-dir', str(bare), 'ls-tree', '-r', '--name-only', handoff.BRANCH], text=True).splitlines()
+                    self.assertEqual(names, ['handoff/'+req['day']+'.json'])
+
+    def test_import_ready_does_not_open_db_without_a_production_result(self):
+        fail = lambda: self.fail('Pending/rehearsal must not access DB')
+        self.assertEqual(handoff.import_result(None, fail, if_ready=True), (None, 'pending'))
+        record, _ = handoff.enqueue(None, request())
+        _, status = handoff.import_result(record, fail, if_ready=True)
+        self.assertEqual(status, 'pending')
+        record, _ = handoff.enqueue(None, request(), rehearsal=True)
+        record, _ = handoff.claim(record, 'worker')
+        record, _ = handoff.submit(record, 'worker', result(record['request']))
+        _, status = handoff.import_result(record, fail, if_ready=True)
+        self.assertEqual(status, 'pending')
 
     def test_rehearsal_never_accesses_import_db(self):
         req = request()

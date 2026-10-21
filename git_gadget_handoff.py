@@ -41,9 +41,10 @@ def check_record(record):
 
 
 class GitQueue:
-    def __init__(self, remote=REMOTE, day=None):
+    def __init__(self, remote=REMOTE, day=None, pending=False):
         self.remote = remote
         self.day = day or logical_day()
+        self.pending = pending
         if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', self.day):
             raise ValueError('Invalid day')
 
@@ -62,27 +63,35 @@ class GitQueue:
                     run('git', 'checkout', '-q', '--orphan', BRANCH, cwd=root)
                 else:
                     raise RuntimeError(refs.stderr)
+                records = {}
                 for name in run('git', 'ls-files', cwd=root).stdout.splitlines():
                     if not re.fullmatch(r'handoff/\d{4}-\d{2}-\d{2}\.json', name):
                         raise RuntimeError('Unexpected files on data branch; stop')
-                path = root / 'handoff' / (self.day+'.json')
-                record = None
-                if path.exists():
-                    if path.is_symlink() or path.stat().st_size > 1500000:
+                    file = root / name
+                    if file.is_symlink() or file.stat().st_size > 1500000:
                         raise ValueError('Invalid queue file')
-                    record = json.loads(path.read_text())
+                    record = json.loads(file.read_text())
                     check_record(record)
-                    if record['request']['day'] != self.day:
+                    day = file.stem
+                    if record['request']['day'] != day:
                         raise ValueError('Queue day/path mismatch')
+                    records[day] = record
+                day = self.day
+                if self.pending:
+                    outstanding = sorted(d for d, r in records.items() if r['mode'] == 'production' and r['ack'] is None)
+                    if outstanding:
+                        day = outstanding[0]
+                path = root / 'handoff' / (day+'.json')
+                record = records.get(day)
                 before = copy.deepcopy(record)
                 record, output = update(record)
-                check_record(record)
                 if record == before:
                     return output
+                check_record(record)
                 path.parent.mkdir(exist_ok=True)
                 path.write_text(json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2)+'\n')
                 run('git', 'add', '--', str(path.relative_to(root)), cwd=root)
-                run('git', 'commit', '-q', '-m', 'Gadget handoff '+self.day, cwd=root)
+                run('git', 'commit', '-q', '-m', 'Gadget handoff '+day, cwd=root)
                 pushed = run('git', 'push', 'origin', 'HEAD:refs/heads/'+BRANCH, cwd=root, check=False)
                 if pushed.returncode == 0:
                     return output
@@ -95,7 +104,7 @@ class GitQueue:
 def enqueue(record, request, *, rehearsal=False):
     if record is not None:
         return record, record['request']
-    check_bundle(request)
+    check_bundle(request, current=True)
     return {'mode': 'rehearsal' if rehearsal else 'production', 'request': request, 'claim': None, 'result': None, 'ack': None}, request
 
 
@@ -121,7 +130,9 @@ def submit(record, worker, result):
     return record, digest(result)
 
 
-def import_result(record, connection_factory):
+def import_result(record, connection_factory, *, if_ready=False):
+    if if_ready and (record is None or record['result'] is None or record['mode'] == 'rehearsal'):
+        return record, 'pending'
     if record is None or record['result'] is None:
         raise RuntimeError('No tested result to import')
     if record['mode'] != 'production':
@@ -141,36 +152,42 @@ def import_result(record, connection_factory):
 
 def main():
     parser = argparse.ArgumentParser(__doc__)
-    parser.add_argument('action', choices=['enqueue', 'claim', 'submit', 'import', 'status'])
+    parser.add_argument('action', choices=['enqueue', 'claim', 'submit', 'import', 'import-ready', 'status'])
     parser.add_argument('--published-file', type=Path)
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--worker')
     parser.add_argument('--rehearsal', action='store_true', help='enqueue only; result can never be imported')
-    parser.add_argument('--day', help='Sydney day; prior days permitted only for status/import acknowledgement recovery')
+    parser.add_argument('--day', help='Explicit Sydney request day; otherwise resume oldest pending production work')
     args = parser.parse_args()
     # Verify the existing destination before any data-branch read/write.
     with urlopen('https://api.github.com/repos/solresol/prosodia-catholica', timeout=15) as response:
         info = json.load(response)
     if info.get('full_name') != 'solresol/prosodia-catholica' or info.get('private') is not False:
         raise RuntimeError('Unexpected remote identity or visibility')
-    if args.day and args.action not in ('status', 'import'):
-        parser.error('--day is only for status/import')
+    if args.day and args.action == 'enqueue':
+        parser.error('enqueue assigns today or resumes pending work')
     if args.rehearsal and args.action != 'enqueue':
         parser.error('--rehearsal is only for enqueue')
-    queue = GitQueue(day=args.day)
+    if args.action == 'submit' and args.bundle:
+        submitted_day = json.loads(args.bundle.read_text())['day']
+        if args.day and args.day != submitted_day:
+            parser.error('--day disagrees with result bundle')
+        args.day = submitted_day
+    queue = GitQueue(day=args.day, pending=not args.day and not args.rehearsal)
     if args.action == 'enqueue':
         if not args.published_file:
             parser.error('--published-file must be the last successfully published passages.json')
         def update(record):
             if record is not None:
-                return record, 'already-enqueued'
+                return record, {'state': 'already-enqueued', 'day': record['request']['day'], 'mode': record['mode']}
             from db import get_connection
             conn = get_connection()
             try:
                 request = prepare(conn, json.loads(args.published_file.read_text()), rehearsal=args.rehearsal)
             finally:
                 conn.close()
-            return enqueue(record, request, rehearsal=args.rehearsal)
+            record, _ = enqueue(record, request, rehearsal=args.rehearsal)
+            return record, {'state': 'enqueued', 'day': record['request']['day'], 'mode': record['mode'], 'request_sha256': digest(request)}
         output = queue.transact(update)
     elif args.action == 'claim':
         if not args.worker or not args.bundle:
@@ -186,9 +203,9 @@ def main():
             parser.error('submit requires --worker and --bundle')
         result = json.loads(args.bundle.read_text())
         output = queue.transact(lambda r: submit(r, args.worker, result))
-    elif args.action == 'import':
+    elif args.action in ('import', 'import-ready'):
         from db import get_connection
-        output = queue.transact(lambda r: import_result(r, get_connection))
+        output = queue.transact(lambda r: import_result(r, get_connection, if_ready=args.action == 'import-ready'))
     else:
         def status(record):
             if record is None:
