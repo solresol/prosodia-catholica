@@ -70,9 +70,10 @@ The site is generated as:
 
 ### Daily cron (raksasa)
 
-A cloud gadget / local maintenance and publisher split is staged but **not active**.
+A minimal cloud gadget split is staged but **not active**; the existing local cron
+and all non-gadget steps remain in place.
 See [handoff design, operational setup and exact cloud prompt](docs/cloud-gadget-workflow.md).
-Translation, summaries and overlap computation remain local in the staged design.
+Only the gadget generation API call moves to cloud after verified cutover.
 
 
 Install the daily pipeline:

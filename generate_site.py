@@ -471,6 +471,7 @@ def highlight_many_html(text: str, spans: list[dict]) -> str:
 
 
 def gadget_srcdoc(*, html: str | None, css: str | None, js: str | None) -> str:
+    from gadget_validation import GADGET_CSP
     body_html = html or ""
     style_css = (css or "").replace("</style>", "<\\/style>")
     script_js = (js or "").replace("</script>", "<\\/script>")
@@ -479,6 +480,8 @@ def gadget_srcdoc(*, html: str | None, css: str | None, js: str | None) -> str:
         "<html lang=\"en\">"
         "<head>"
         "<meta charset=\"utf-8\"/>"
+        + '<meta http-equiv="Content-Security-Policy" content="' + GADGET_CSP + '"/>'
+        +
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/>"
         "<style>"
         + style_css

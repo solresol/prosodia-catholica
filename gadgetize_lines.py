@@ -135,6 +135,10 @@ def main() -> None:
     try:
         with conn:
             with conn.cursor() as cur:
+                # Serialize legacy generation against cloud imports during cutover.
+                cur.execute('SELECT pg_try_advisory_xact_lock(18482, 716)')
+                if not cur.fetchone()[0]:
+                    raise RuntimeError('Gadget generation/import already running')
                 cur.execute(
                     """
                     SELECT id, ref, greek_text, english_translation

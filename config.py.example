@@ -31,3 +31,7 @@ STEPHANOS_DB_PASSWORD = "CHANGE_ME"
 
 # Public Stephanos site (for overlap links)
 STEPHANOS_SITE_BASE_URL = "https://stephanos.symmachus.org"
+
+# Staged cutover only after cloud rehearsal and readiness confirmation.
+# Default legacy preserves the existing local gadget API call.
+GADGET_WORKFLOW = "legacy"  # switch to "cloud" only at coordinated cutover

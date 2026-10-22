@@ -24,7 +24,7 @@ def result(req):
     res = copy.deepcopy(req)
     for role in ('new', 'past'):
         res[role]['candidate'] = dict(html='<input>', css='', js='void 0')
-        res[role]['test_evidence'] = dict(browser='Chromium', interaction='Greek input and empty/reset', expected='α', actual='α')
+        res[role]['test_evidence'] = dict(candidate_sha256=gadgets.digest(res[role]['candidate']), browser='Chromium', interaction='Greek input and empty/reset', expected='α', actual='α', assertions=[dict(case=c, expected='α', actual='α', passed=True) for c in ('Greek input', 'second input', 'reset')], harness='await page.locator("input").fill("α");', review=dict(reviewer='independent-test-reviewer', notes='Reviewed harness and assertions'))
     return res
 
 
@@ -62,6 +62,36 @@ class FakeConnection:
 
 
 class HandoffTests(unittest.TestCase):
+    def test_verified_remote_normalization_preserves_https(self):
+        from types import SimpleNamespace
+        for remote in ('https://github.com/solresol/prosodia-catholica.git', 'https://github.com/solresol/prosodia-catholica', 'https://github.com/solresol/prosodia-catholica.git/'):
+            self.assertEqual(handoff.remote_identity(remote), ('solresol/prosodia-catholica', 'https'))
+            with patch.object(handoff, 'run', return_value=SimpleNamespace(stdout=remote+'\n')):
+                self.assertEqual(handoff.resolve_remote(), remote)
+        for remote in ('git@github.com:solresol/prosodia-catholica.git', 'ssh://git@github.com/solresol/prosodia-catholica.git'):
+            self.assertEqual(handoff.remote_identity(remote)[1], 'ssh')
+        for remote in ('https://github.com/other/prosodia-catholica', 'https://github.com.evil/solresol/prosodia-catholica', 'https://token@github.com/solresol/prosodia-catholica', 'http://github.com/solresol/prosodia-catholica', 'https://github.com/solresol/prosodia-catholica?x=1', 'ssh://git@github.com:22/solresol/prosodia-catholica'):
+            with self.assertRaises(ValueError): handoff.remote_identity(remote)
+        with patch.object(handoff, 'run', side_effect=[SimpleNamespace(stdout='https://github.com/solresol/prosodia-catholica.git\n'), SimpleNamespace(stdout='git@github.com:solresol/prosodia-catholica.git\n')]):
+            with self.assertRaises(ValueError): handoff.resolve_remote()
+
+    def test_result_day_binding_evidence_and_midnight_retry(self):
+        req = request(); res = result(req)
+        wrong = copy.deepcopy(res); wrong['day'] = '2000-01-01'
+        with self.assertRaises(ValueError): gadgets.validate_result(req, wrong, current=False)
+        wrong = copy.deepcopy(res); del wrong['new']['test_evidence']['assertions']
+        with self.assertRaises(ValueError): gadgets.validate_result(req, wrong)
+        record, _ = handoff.enqueue(None, req)
+        record, _ = handoff.claim(record, 'worker')
+        bad = copy.deepcopy(res); bad['new']['test_evidence']['candidate_sha256'] = '0'*64
+        with self.assertRaises(ValueError): handoff.submit(record, 'worker', bad)
+        bad = copy.deepcopy(res); bad['new']['test_evidence']['review']['reviewer'] = 'worker'
+        with self.assertRaises(ValueError): handoff.submit(record, 'worker', bad)
+        record, _ = handoff.submit(record, 'worker', res)
+        with patch.object(gadgets, 'logical_day', return_value='2099-01-01'):
+            _, returned = handoff.submit(record, 'worker', res)
+            self.assertEqual(returned, gadgets.digest(res))
+
     def test_sydney_dst_and_logical_midnight(self):
         start, end = gadgets.day_bounds('2026-10-04')
         self.assertEqual(end.timestamp() - start.timestamp(), 23*3600)

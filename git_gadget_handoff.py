@@ -12,14 +12,48 @@ import re
 import subprocess
 import tempfile
 from urllib.request import urlopen
+from urllib.parse import urlsplit
 from cloud_gadgets import apply, check_bundle, digest, logical_day, prepare, validate_result
 
-REMOTE = 'git@github.com:solresol/prosodia-catholica.git'
+REPOSITORY = 'solresol/prosodia-catholica'
 BRANCH = 'gadget-handoff'
 
 
 def run(*args, cwd=None, check=True):
     return subprocess.run(args, cwd=cwd, check=check, capture_output=True, text=True)
+
+
+def remote_identity(remote):
+    """Accept only equivalent existing GitHub origins, preserving transport."""
+    if remote.startswith('git@github.com:'):
+        path = remote[len('git@github.com:'):]
+        transport = 'ssh'
+    else:
+        url = urlsplit(remote)
+        if url.hostname != 'github.com' or url.query or url.fragment or url.port is not None or url.password is not None:
+            raise ValueError('Unexpected Git remote')
+        if url.scheme == 'https' and url.username is None:
+            transport = 'https'
+        elif url.scheme == 'ssh' and url.username == 'git':
+            transport = 'ssh'
+        else:
+            raise ValueError('Unsupported Git transport/identity')
+        path = url.path.removeprefix('/')
+    path = path.removesuffix('/')
+    path = path.removesuffix('.git')
+    if path != REPOSITORY:
+        raise ValueError('Unexpected repository identity')
+    return REPOSITORY, transport
+
+
+def resolve_remote(cwd=None):
+    # get-url expands configured insteadOf/pushInsteadOf; reject multiple origins
+    # or a surprising push transport instead of silently switching protocols.
+    fetch = run('git', 'remote', 'get-url', '--all', 'origin', cwd=cwd).stdout.splitlines()
+    push = run('git', 'remote', 'get-url', '--push', '--all', 'origin', cwd=cwd).stdout.splitlines()
+    if len(fetch) != 1 or len(push) != 1 or remote_identity(fetch[0]) != remote_identity(push[0]):
+        raise ValueError('Origin fetch/push identity or transport differs')
+    return push[0]
 
 
 def check_record(record):
@@ -41,8 +75,8 @@ def check_record(record):
 
 
 class GitQueue:
-    def __init__(self, remote=REMOTE, day=None, pending=False):
-        self.remote = remote
+    def __init__(self, remote=None, day=None, pending=False):
+        self.remote = remote if remote is not None else resolve_remote(Path(__file__).resolve().parent)
         self.day = day or logical_day()
         self.pending = pending
         if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', self.day):
@@ -123,9 +157,14 @@ def claim(record, worker):
 def submit(record, worker, result):
     if record is None or record['claim'] != worker:
         raise RuntimeError('Worker does not own daily claim')
+    if record['result'] is not None:
+        if record['result'] != result:
+            raise RuntimeError('Result is immutable once submitted')
+        return record, digest(result)
     validate_result(record['request'], result)
-    if record['result'] not in (None, result):
-        raise RuntimeError('Result is immutable once submitted')
+    for role in ('new', 'past'):
+        if result[role] and result[role]['test_evidence']['review']['reviewer'] == worker:
+            raise ValueError('Author cannot act as independent reviewer')
     record['result'] = result
     return record, digest(result)
 

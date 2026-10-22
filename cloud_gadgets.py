@@ -52,10 +52,24 @@ def check_bundle(bundle, *, tested=False, current=False):
             raise ValueError('Unexpected candidate fields or size')
         if tested:
             evidence = item['test_evidence']
-            if set(evidence) != {'browser', 'interaction', 'expected', 'actual'} or any(not isinstance(v, str) or not v.strip() or len(v) > 2000 for v in evidence.values()):
-                raise ValueError('Bounded browser and behavioral evidence required')
+            strings = ('browser', 'interaction', 'expected', 'actual')
+            if set(evidence) != {*strings, 'assertions', 'harness', 'review', 'candidate_sha256'} or any(not isinstance(evidence[k], str) or not evidence[k].strip() or len(evidence[k]) > 2000 for k in strings):
+                raise ValueError('Bounded browser evidence, retained assertions/harness and review required')
             if evidence['expected'] != evidence['actual']:
                 raise ValueError('Expected/actual mismatch')
+            if evidence['candidate_sha256'] != digest(c):
+                raise ValueError('Browser evidence is bound to a different candidate')
+            assertions = evidence['assertions']
+            if not isinstance(assertions, list) or not 3 <= len(assertions) <= 20:
+                raise ValueError('Retain at least three actual browser assertions')
+            for assertion in assertions:
+                if set(assertion) != {'case', 'expected', 'actual', 'passed'} or assertion['passed'] is not True or assertion['expected'] != assertion['actual'] or any(not isinstance(assertion[k], str) or not assertion[k].strip() or len(assertion[k]) > 2000 for k in ('case', 'expected', 'actual')):
+                    raise ValueError('Invalid or failing retained browser assertion')
+            if not isinstance(evidence['harness'], str) or not evidence['harness'].strip() or len(evidence['harness']) > 32000:
+                raise ValueError('Retain bounded executable browser test harness')
+            review = evidence['review']
+            if set(review) != {'reviewer', 'notes'} or any(not isinstance(v, str) or not v.strip() or len(v) > 2000 for v in review.values()):
+                raise ValueError('Independent review record required')
             if not c['html'].strip() or not c['js'].strip():
                 raise ValueError('Empty gadget')
             _validate_gadget(**c)
@@ -76,6 +90,8 @@ def validate_bundle(bundle):
 def validate_result(request, result, *, current=False):
     check_bundle(request, current=current)
     check_bundle(result, tested=True, current=current)
+    if request['day'] != result['day']:
+        raise ValueError('Result day does not match request identity')
     for role in ('new', 'past'):
         if (request[role] is None) != (result[role] is None):
             raise ValueError('Result changed assigned passages')
@@ -89,7 +105,7 @@ def prepare(conn, published, *, rehearsal=False):
     with conn:
         with conn.cursor() as cur:
             cur.execute("SET LOCAL statement_timeout = '10s'")
-            cur.execute('SELECT 1 FROM cathpros_lines WHERE gadget_generated_at >= %s AND gadget_generated_at < %s LIMIT 1', day_bounds(logical_day()))
+            cur.execute("SELECT 1 FROM cathpros_lines WHERE gadget_generated_at >= %s AND gadget_generated_at < %s AND COALESCE(gadget_model, '') NOT LIKE 'codex-cloud:%%' LIMIT 1", day_bounds(logical_day()))
             if cur.fetchone() and not rehearsal:
                 raise RuntimeError('A gadget already generated this Sydney day; no duplicate queue')
             cur.execute('SELECT ' + ', '.join(FIELDS) + " FROM cathpros_lines WHERE english_translation IS NOT NULL AND greek_text IS NOT NULL AND ref <> 'E' AND COALESCE(ref_major,1) <> 0 ORDER BY gadget_attempts, id")
@@ -133,7 +149,7 @@ def apply(conn, request, result):
                 if not all(matches(i) for i in items):
                     raise RuntimeError('Previously imported data was subsequently edited; inspect manually')
                 return 'already-imported'
-            cur.execute('SELECT 1 FROM cathpros_lines WHERE gadget_generated_at >= %s AND gadget_generated_at < %s LIMIT 1', (start, end))
+            cur.execute("SELECT 1 FROM cathpros_lines WHERE gadget_generated_at >= %s AND gadget_generated_at < %s AND COALESCE(gadget_model, '') NOT LIKE 'codex-cloud:%%' LIMIT 1", (start, end))
             if cur.fetchone():
                 raise RuntimeError('A gadget already generated this Sydney day; inspect legacy/cloud overlap')
             for item in items:
