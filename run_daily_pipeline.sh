@@ -57,15 +57,8 @@ case "$GADGET_WORKFLOW" in
   *) echo "Unknown GADGET_WORKFLOW: $GADGET_WORKFLOW" >&2; return 2 ;;
 esac
 
-OVERLAP_METRIC_VERSION="${OVERLAP_METRIC_VERSION:-v1}"
-OVERLAP_MAX_MATCHES="${OVERLAP_MAX_MATCHES:-10}"
-export OVERLAP_METRIC_VERSION OVERLAP_MAX_MATCHES
-
-echo "Step 3: compute Stephanos overlaps (${OVERLAP_METRIC_VERSION})..." | tee -a "$LOGFILE"
-uv run compute_overlaps.py --metric-version "$OVERLAP_METRIC_VERSION" --max-matches "$OVERLAP_MAX_MATCHES" 2>&1 | tee -a "$LOGFILE"
-
 echo "Step 4: generate site..." | tee -a "$LOGFILE"
-uv run generate_site.py --overlap-metric-version "$OVERLAP_METRIC_VERSION" 2>&1 | tee -a "$LOGFILE"
+uv run generate_site.py 2>&1 | tee -a "$LOGFILE"
 
 echo "Step 5: deploy site via rsync..." | tee -a "$LOGFILE"
 DEPLOY_HOST="$(python3 -c 'import config; print(getattr(config, "DEPLOY_HOST", "merah"))')"

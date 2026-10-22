@@ -63,13 +63,14 @@ class WorkflowTests(unittest.TestCase):
             legacy, steps=execute()
             self.assertEqual((legacy.returncode,legacy.stdout,legacy.stderr),(0,b'',b''))
             self.assertIn('git pull', steps)
-            for name in ('init_db.py','translate_lines.py','summarize_lines.py','gadgetize_lines.py','compute_overlaps.py','generate_site.py','rsync'):
+            for name in ('init_db.py','translate_lines.py','summarize_lines.py','gadgetize_lines.py','generate_site.py','rsync'):
                 self.assertIn(name,steps)
             self.assertNotIn('git_gadget_handoff.py',steps)
             cloud, steps=execute(GADGET_WORKFLOW='cloud')
             self.assertEqual((cloud.returncode,cloud.stdout,cloud.stderr),(0,b'',b''))
             self.assertNotIn('gadgetize_lines.py',steps)
-            names=['init_db.py','translate_lines.py','summarize_lines.py','import-ready','compute_overlaps.py','generate_site.py','rsync','enqueue']
+            self.assertNotIn('compute_overlaps.py',steps)
+            names=['init_db.py','translate_lines.py','summarize_lines.py','import-ready','generate_site.py','rsync','enqueue']
             self.assertEqual([steps.index(n) for n in names],sorted(steps.index(n) for n in names))
             failed,steps=execute(GADGET_WORKFLOW='cloud',FAIL_STEP='import-ready',FAIL_CODE='25')
             self.assertEqual(failed.returncode,25)

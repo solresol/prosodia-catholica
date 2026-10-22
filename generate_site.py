@@ -6,13 +6,11 @@ import json
 import math
 import os
 import re
-import unicodedata
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 
 from db import get_connection
-from stephanos_db import get_connection as get_stephanos_connection
 
 
 def _site_title(default: str) -> str:
@@ -287,28 +285,6 @@ table.tbl td.small{white-space:nowrap;}
 .prose ul{margin:0 0 10px 20px;}
 .prose li{margin:0 0 6px;}
 .pending{color:var(--muted);font-style:italic;}
-.hl{padding:0 2px;border-radius:4px;}
-.hl-h{background:rgba(255,214,10,.22);}
-.hl-s{background:rgba(122,162,255,.22);}
-.swatch{
-  display:inline-block;
-  width:12px;
-  height:12px;
-  border-radius:4px;
-  margin-right:8px;
-  vertical-align:-2px;
-  border:1px solid rgba(231,236,255,.18);
-}
-.c0{background:rgba(255,214,10,.22);}
-.c1{background:rgba(122,162,255,.22);}
-.c2{background:rgba(100,231,173,.20);}
-.c3{background:rgba(255,143,171,.20);}
-.c4{background:rgba(255,170,0,.20);}
-.c5{background:rgba(0,210,255,.18);}
-.c6{background:rgba(186,104,200,.20);}
-.c7{background:rgba(239,83,80,.18);}
-.c8{background:rgba(149,117,205,.20);}
-.c9{background:rgba(76,175,80,.18);}
 .gadget-frame{
   width:100%;
   height:390px;
@@ -339,135 +315,16 @@ def ref_to_slug(ref: str) -> str:
     return slug or "ref"
 
 
-def _stephanos_base_url(default: str) -> str:
-    try:
-        from config import STEPHANOS_SITE_BASE_URL as CONFIG_STEPHANOS_SITE_BASE_URL
-    except ImportError:
-        CONFIG_STEPHANOS_SITE_BASE_URL = None
-    return (CONFIG_STEPHANOS_SITE_BASE_URL or default).rstrip("/")
 
 
-def stephanos_entry_url(*, base_url: str, lemma_id: int) -> str:
-    try:
-        lemma_num = int(lemma_id)
-    except Exception:
-        lemma_num = 0
-    if lemma_num > 0:
-        return f"{base_url}/headword_{lemma_num}.html"
-    return f"{base_url}/cgi-bin/review.cgi?id={lemma_id}"
 
 
-def _to_int(value) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except Exception:
-        return None
 
 
-def highlight_html(text: str, *, start, end, cls: str) -> str:
-    start_i = _to_int(start)
-    end_i = _to_int(end)
-    if start_i is None or end_i is None:
-        return escape(text or "")
-    if start_i < 0 or end_i <= start_i or end_i > len(text):
-        return escape(text or "")
-    return (
-        escape(text[:start_i])
-        + f'<span class="hl {cls}">'
-        + escape(text[start_i:end_i])
-        + "</span>"
-        + escape(text[end_i:])
-    )
 
 
-def highlight_snippet_html(
-    text: str, *, start, end, cls: str, context: int = 140
-) -> str:
-    start_i = _to_int(start)
-    end_i = _to_int(end)
-    if start_i is None or end_i is None:
-        return escape(text or "")
-    if start_i < 0 or end_i <= start_i or end_i > len(text):
-        return escape(text or "")
-    left = max(0, start_i - int(context))
-    right = min(len(text), end_i + int(context))
-    prefix = "…" if left > 0 else ""
-    suffix = "…" if right < len(text) else ""
-    return (
-        escape(prefix)
-        + escape(text[left:start_i])
-        + f'<span class="hl {cls}">'
-        + escape(text[start_i:end_i])
-        + "</span>"
-        + escape(text[end_i:right])
-        + escape(suffix)
-    )
 
 
-def highlight_many_html(text: str, spans: list[dict]) -> str:
-    if not spans:
-        return escape(text or "")
-
-    cleaned: list[tuple[int, int, str, float]] = []
-    for sp in spans:
-        start_i = _to_int(sp.get("start"))
-        end_i = _to_int(sp.get("end"))
-        cls = (sp.get("cls") or "").strip()
-        priority = sp.get("priority", 0.0)
-        try:
-            priority_f = float(priority)
-        except Exception:
-            priority_f = 0.0
-        if start_i is None or end_i is None:
-            continue
-        if start_i < 0 or end_i <= start_i or end_i > len(text):
-            continue
-        if not cls:
-            continue
-        cleaned.append((start_i, end_i, cls, priority_f))
-
-    if not cleaned:
-        return escape(text or "")
-
-    breakpoints = {0, len(text)}
-    for start_i, end_i, _cls, _prio in cleaned:
-        breakpoints.add(start_i)
-        breakpoints.add(end_i)
-
-    points = sorted(breakpoints)
-    intervals: list[tuple[int, int, str | None]] = []
-    for i in range(len(points) - 1):
-        a, b = points[i], points[i + 1]
-        if a >= b:
-            continue
-        covering = [
-            (s, e, cls, prio)
-            for (s, e, cls, prio) in cleaned
-            if s <= a and e >= b
-        ]
-        if not covering:
-            intervals.append((a, b, None))
-            continue
-        best = max(covering, key=lambda t: (t[3], t[1] - t[0]))
-        intervals.append((a, b, best[2]))
-
-    merged: list[tuple[int, int, str | None]] = []
-    for a, b, cls in intervals:
-        if merged and merged[-1][2] == cls and merged[-1][1] == a:
-            merged[-1] = (merged[-1][0], b, cls)
-        else:
-            merged.append((a, b, cls))
-
-    parts: list[str] = []
-    for a, b, cls in merged:
-        seg = escape(text[a:b])
-        if cls:
-            parts.append(f'<span class="hl {cls}">{seg}</span>')
-        else:
-            parts.append(seg)
-    return "".join(parts)
 
 
 def gadget_srcdoc(*, html: str | None, css: str | None, js: str | None) -> str:
@@ -580,18 +437,16 @@ def render_shell(*, title: str, body_html: str) -> str:
 """
 
 
-def render_index(*, title: str, stats: dict, lines: list[dict], top_overlap_by_line: dict[int, dict]) -> str:
+def render_index(*, title: str, stats: dict, lines: list[dict]) -> str:
     translated = stats["translated"]
     summarized = stats["summarized"]
     total = stats["total"]
     percent = (translated / total * 100.0) if total else 0.0
     percent_str = f"{percent:.1f}%"
 
-    stephanos_base_url = _stephanos_base_url("https://stephanos.symmachus.org")
 
     rows_html = []
     for row in lines:
-        line_id = row["id"]
         ref = row["ref"]
         slug = ref_to_slug(ref)
         summary = row.get("summary") or ""
@@ -611,37 +466,14 @@ def render_index(*, title: str, stats: dict, lines: list[dict], top_overlap_by_l
         )
         status_cell = " ".join(status_html)
 
-        overlap = top_overlap_by_line.get(line_id)
-        overlap_cell = "—"
-        char_cell = "—"
-        word_cell = "—"
-        char_val = ""
-        word_val = ""
-        if overlap:
-            lemma_id = int(overlap["stephanos_lemma_id"])
-            meineke_id = overlap.get("stephanos_meineke_id") or f"lemma {lemma_id}"
-            headword = overlap.get("stephanos_headword") or ""
-            url = stephanos_entry_url(base_url=stephanos_base_url, lemma_id=lemma_id)
-            label = (f"{meineke_id} {headword}").strip()
-            overlap_cell = f'<a href="{escape(url)}" target="_blank" rel="noopener">{escape(label)}</a>'
-            char_cell = f"{overlap['char_lcs_ratio']*100:.1f}%"
-            word_cell = f"{overlap['word_lcs_ratio']*100:.1f}%"
-            char_val = f"{overlap['char_lcs_ratio']*100:.6f}"
-            word_val = f"{overlap['word_lcs_ratio']*100:.6f}"
-
         hay = f"{ref} {summary}"
-        if overlap:
-            hay += f" {overlap.get('stephanos_meineke_id') or ''} {overlap.get('stephanos_headword') or ''}"
 
         rows_html.append(
             f"""
-            <tr data-hay="{escape(hay)}" data-ref-major="{escape(str(ref_major) if ref_major is not None else '')}" data-ref-minor="{escape(str(ref_minor) if ref_minor is not None else '')}" data-char="{escape(char_val)}" data-word="{escape(word_val)}">
+            <tr data-hay="{escape(hay)}" data-ref-major="{escape(str(ref_major) if ref_major is not None else '')}" data-ref-minor="{escape(str(ref_minor) if ref_minor is not None else '')}">
               <td class="ref"><a href="passages/{escape(slug)}.html">{escape(ref)}</a></td>
               <td>{escape(summary) if summary else '<span class="pending">—</span>'}</td>
               <td class="small">{status_cell}</td>
-              <td>{overlap_cell}</td>
-              <td class="small">{escape(char_cell)}</td>
-              <td class="small">{escape(word_cell)}</td>
             </tr>
             """.strip()
         )
@@ -657,11 +489,9 @@ def render_index(*, title: str, stats: dict, lines: list[dict], top_overlap_by_l
       </div>
     </header>
     <div class="controls">
-      <input id="q" type="search" placeholder="Filter by ref, summary, or overlap…" autocomplete="off" />
+      <input id="q" type="search" placeholder="Filter by ref or summary…" autocomplete="off" />
       <a class="btn" href="index.html">Index</a>
-      <a class="btn" href="analysis/index.html">Analysis</a>
       <a class="btn" href="analysis/progress.html">Progress</a>
-      <a class="btn" href="analysis/coverage.html">Coverage</a>
       <a class="btn" href="passages.json">Data (JSON)</a>
       <a class="btn" href="https://github.com/solresol/prosodia-catholica" target="_blank" rel="noopener">GitHub</a>
     </div>
@@ -672,9 +502,6 @@ def render_index(*, title: str, stats: dict, lines: list[dict], top_overlap_by_l
             <th class="sortable" data-sort="ref">Ref<span class="arrow"></span></th>
             <th>Summary</th>
             <th>Status</th>
-            <th>Top overlap (Stephanos)</th>
-            <th class="sortable" data-sort="char">Char<span class="arrow"></span></th>
-            <th class="sortable" data-sort="word">Word<span class="arrow"></span></th>
           </tr>
         </thead>
         <tbody>
@@ -712,39 +539,12 @@ def render_index(*, title: str, stats: dict, lines: list[dict], top_overlap_by_l
         return [1e9, 1e9];
       }}
 
-      function metricVal(row, key){{
-        const v = parseFloat(row.dataset[key] || '');
-        return Number.isFinite(v) ? v : null;
-      }}
-
       function compareRows(a, b){{
-        if (sortKey === 'ref') {{
-          const [am, an] = refParts(a);
-          const [bm, bn] = refParts(b);
-          if (am !== bm) return (am - bm) * sortDir;
-          if (an !== bn) return (an - bn) * sortDir;
-          return a.innerText.localeCompare(b.innerText) * sortDir;
-        }}
-        if (sortKey === 'char' || sortKey === 'word') {{
-          const av = metricVal(a, sortKey);
-          const bv = metricVal(b, sortKey);
-          if (av === null && bv === null) {{
-            const [am, an] = refParts(a);
-            const [bm, bn] = refParts(b);
-            if (am !== bm) return am - bm;
-            if (an !== bn) return an - bn;
-            return 0;
-          }}
-          if (av === null) return 1; // missing always last
-          if (bv === null) return -1;
-          if (av !== bv) return (av - bv) * sortDir;
-          const [am, an] = refParts(a);
-          const [bm, bn] = refParts(b);
-          if (am !== bm) return am - bm;
-          if (an !== bn) return an - bn;
-          return 0;
-        }}
-        return 0;
+        const [am, an] = refParts(a);
+        const [bm, bn] = refParts(b);
+        if (am !== bm) return (am - bm) * sortDir;
+        if (an !== bn) return (an - bn) * sortDir;
+        return a.innerText.localeCompare(b.innerText) * sortDir;
       }}
 
       function renderSortIndicators(){{
@@ -764,7 +564,7 @@ def render_index(*, title: str, stats: dict, lines: list[dict], top_overlap_by_l
           sortDir *= -1;
         }} else {{
           sortKey = key;
-          sortDir = (key === 'ref') ? 1 : -1; // metrics default desc
+          sortDir = 1;
         }}
         rows.sort(compareRows);
         for (const el of rows) tbody.appendChild(el);
@@ -791,83 +591,10 @@ def render_passage(
     gadget_html: str | None,
     gadget_css: str | None,
     gadget_js: str | None,
-    overlaps: list[dict],
-    stephanos_text_by_lemma_id: dict[int, dict],
 ) -> str:
     title = f"{site_title} — {ref}"
-    stephanos_base_url = _stephanos_base_url("https://stephanos.symmachus.org")
 
-    highlight_palette = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"]
-    for i, ov in enumerate(overlaps):
-        ov["_color_cls"] = highlight_palette[i % len(highlight_palette)]
-
-    greek_html = highlight_many_html(
-        greek_text or "",
-        [
-            {
-                "start": ov.get("herodian_char_start"),
-                "end": ov.get("herodian_char_end"),
-                "cls": ov.get("_color_cls"),
-                "priority": ov.get("char_lcs_len") or 0,
-            }
-            for ov in overlaps
-        ],
-    )
-
-    overlaps_html = []
-    for ov in overlaps:
-        lemma_id = int(ov["stephanos_lemma_id"])
-        meineke_id = ov.get("stephanos_meineke_id") or ""
-        headword = ov.get("stephanos_headword") or ""
-        char_pct = f"{ov['char_lcs_ratio']*100:.1f}%"
-        word_pct = f"{ov['word_lcs_ratio']*100:.1f}%"
-        stephanos_text = stephanos_text_by_lemma_id.get(lemma_id, {}).get("text_body") or ""
-        stephanos_url = stephanos_entry_url(base_url=stephanos_base_url, lemma_id=lemma_id)
-        color_cls = (ov.get("_color_cls") or "").strip()
-
-        label = (f"{meineke_id} {headword}").strip() or f"lemma {lemma_id}"
-        swatch = f'<span class="swatch {escape(color_cls)}"></span>' if color_cls else ""
-        herodian_snippet = highlight_snippet_html(
-            greek_text or "",
-            start=ov.get("herodian_char_start"),
-            end=ov.get("herodian_char_end"),
-            cls=color_cls or "hl-h",
-            context=160,
-        )
-        stephanos_snippet = highlight_snippet_html(
-            stephanos_text,
-            start=ov.get("stephanos_char_start"),
-            end=ov.get("stephanos_char_end"),
-            cls=color_cls or "hl-s",
-            context=220,
-        )
-
-        overlaps_html.append(
-            f"""
-            <div class="row">
-              <div class="row-head">
-                <div class="ref">{swatch}<a href="{escape(stephanos_url)}" target="_blank" rel="noopener">{escape(label)}</a></div>
-                <div class="kvs">
-                  <span class="kv">char LCS {escape(str(ov['char_lcs_len']))} ({escape(char_pct)})</span>
-                  <span class="kv">word LCS {escape(str(ov['word_lcs_len']))} ({escape(word_pct)})</span>
-                </div>
-              </div>
-              <details>
-                <summary>Show overlap highlight</summary>
-                <div class="grid">
-                  <pre class="greek" lang="el">{herodian_snippet}</pre>
-                  <pre class="greek" lang="el">{stephanos_snippet}</pre>
-                </div>
-              </details>
-            </div>
-            """.strip()
-        )
-
-    overlaps_block = (
-        "<div class='meta'><span class='pending'>No overlaps computed yet.</span></div>"
-        if not overlaps_html
-        else "\n".join(overlaps_html)
-    )
+    greek_html = escape(greek_text or "")
 
     gadget_block = "<span class='pending'>No gadget yet.</span>"
     if gadget_html is not None or gadget_css is not None or gadget_js is not None:
@@ -898,8 +625,6 @@ def render_passage(
       <div class="summary">A small interactive toy based on this passage (experimental).</div>
       {gadget_block}
     </div>
-    <h2>Overlaps (Stephanos, Meineke)</h2>
-    {overlaps_block}
     """.strip()
 
     return render_shell(title=title, body_html=body)
@@ -914,7 +639,7 @@ def render_about_lentz(*, site_title: str) -> str:
     </header>
     <div class="controls">
       <a class="btn" href="/index.html">← Index</a>
-      <a class="btn" href="/analysis/index.html">Analysis</a>
+      <a class="btn" href="/analysis/progress.html">Progress</a>
     </div>
 
     <div class="row">
@@ -934,14 +659,6 @@ def render_about_lentz(*, site_title: str) -> str:
     </div>
 
     <div class="row">
-      <div class="ref">Why overlaps can be misleading</div>
-      <div class="prose">
-        <p>Because the Lentz text incorporates (and reorganizes) material that also lives in Stephanus of Byzantium (and elsewhere), substantial overlap is expected.</p>
-        <p>So overlap on this site should not automatically be read as “independent evidence” that Stephanus copied a continuous Herodian text; in many places the overlap reflects the editorial reconstruction itself.</p>
-      </div>
-    </div>
-
-    <div class="row">
       <div class="ref">Further reading</div>
       <div class="prose">
         <ul>
@@ -956,20 +673,6 @@ def render_about_lentz(*, site_title: str) -> str:
     return render_shell(title=title, body_html=body)
 
 
-def _greek_casefold_strip(text: str) -> str:
-    s = (text or "").casefold()
-    s = unicodedata.normalize("NFD", s)
-    out = []
-    for ch in s:
-        if unicodedata.combining(ch):
-            continue
-        if ch == "ϲ":
-            ch = "σ"
-        if unicodedata.category(ch).startswith("L"):
-            out.append(ch)
-        else:
-            out.append(" ")
-    return " ".join("".join(out).split())
 
 
 def _render_progress_page(*, site_title: str, progress_data: dict) -> str:
@@ -1151,37 +854,13 @@ def _render_progress_page(*, site_title: str, progress_data: dict) -> str:
                 f"<code>{escape(_fmt_utc(now_utc + timedelta(days=max_days)))}</code>."
             )
 
-    overlap_row = progress_data.get("latest_overlap_run") or {}
-    overlap_duration = progress_data.get("latest_overlap_duration_seconds")
-    overlap_avg_duration = progress_data.get("overlap_avg_duration_seconds")
-
-    def _fmt_seconds(seconds: float | int | None) -> str:
-        if seconds is None:
-            return "—"
-        sec = max(0, int(round(float(seconds))))
-        h, rem = divmod(sec, 3600)
-        m, s = divmod(rem, 60)
-        if h:
-            return f"{h}h {m}m {s}s"
-        if m:
-            return f"{m}m {s}s"
-        return f"{s}s"
-
     recurring_rows = [
         "<tr><td class='small'>0</td><td>git pull (if clean)</td><td class='small'>daily</td>"
         "<td class='small'>no backlog</td><td class='small'>next cron run</td>"
         "<td>Runs only when working tree is clean.</td></tr>",
         "<tr><td class='small'>1</td><td>init_db.py</td><td class='small'>daily</td>"
         "<td class='small'>no backlog</td><td class='small'>same run</td>"
-        "<td>Idempotent schema/grants check.</td></tr>",
-        (
-            f"<tr><td class='small'>3c</td><td>compute_overlaps.py</td><td class='small'>daily full pass</td>"
-            f"<td class='small'>no backlog</td><td class='small'>same run</td>"
-            f"<td>Latest run: id {_fmt_int(overlap_row.get('id'))}, "
-            f"finished {_fmt_utc(overlap_row.get('finished_at'))}, "
-            f"duration {_fmt_seconds(overlap_duration)} (avg {_fmt_seconds(overlap_avg_duration)}), "
-            f"matches {_fmt_int(progress_data.get('latest_overlap_match_count'))}.</td></tr>"
-        ),
+        "<td>Idempotent core schema check.</td></tr>",
         "<tr><td class='small'>4</td><td>generate_site.py</td><td class='small'>daily</td>"
         "<td class='small'>no backlog</td><td class='small'>same run</td>"
         f"<td>This page generated at {_fmt_utc(now_utc)}.</td></tr>",
@@ -1199,8 +878,6 @@ def _render_progress_page(*, site_title: str, progress_data: dict) -> str:
     </header>
     <div class="controls">
       <a class="btn" href="../index.html">← Index</a>
-      <a class="btn" href="index.html">Analysis</a>
-      <a class="btn" href="coverage.html">Coverage</a>
     </div>
     <div class="row">
       <div class="summary">{overall_eta_html}</div>
@@ -1233,593 +910,21 @@ def _render_progress_page(*, site_title: str, progress_data: dict) -> str:
     return render_shell(title=f"{site_title} — Progress", body_html=body)
 
 
-def _render_analysis_index(*, site_title: str, summary_html: str) -> str:
-    body = f"""
-    <header>
-      <h1><a href="../index.html">{escape(site_title)}</a></h1>
-      <div class="meta"><span class="pill">Analysis</span></div>
-    </header>
-    <div class="controls">
-      <a class="btn" href="../index.html">← Index</a>
-      <a class="btn" href="progress.html">Progress</a>
-      <a class="btn" href="coverage.html">Coverage</a>
-      <a class="btn" href="reuse_predictors_words.html">TF‑IDF + LogReg (words)</a>
-      <a class="btn" href="reuse_predictors_ngrams_2_3.html">TF‑IDF + LogReg (2–3 grams)</a>
-    </div>
-    {summary_html}
-    """.strip()
-    return render_shell(title=f"{site_title} — Analysis", body_html=body)
 
 
-def _render_predictors_page(
-    *,
-    site_title: str,
-    title_suffix: str,
-    subtitle: str,
-    meta: list[str],
-    positive: list[tuple[str, float]],
-    negative: list[tuple[str, float]],
-) -> str:
-    meta_html = " ".join(f'<span class="pill">{escape(m)}</span>' for m in meta)
-
-    def _table(rows: list[tuple[str, float]], heading: str) -> str:
-        tr = []
-        for i, (term, coef) in enumerate(rows, start=1):
-            tr.append(
-                f"<tr><td class='small'>{i}</td><td>{escape(term)}</td><td class='small'>{coef:+.4f}</td></tr>"
-            )
-        return f"""
-        <div class="table-wrap">
-          <table class="tbl">
-            <thead><tr><th colspan="3">{escape(heading)}</th></tr><tr><th>#</th><th>Term</th><th>Coef</th></tr></thead>
-            <tbody>{''.join(tr)}</tbody>
-          </table>
-        </div>
-        """.strip()
-
-    body = f"""
-    <header>
-      <h1><a href="../index.html">{escape(site_title)}</a></h1>
-      <div class="meta">{meta_html}</div>
-    </header>
-    <div class="controls">
-      <a class="btn" href="../index.html">← Index</a>
-      <a class="btn" href="index.html">Analysis</a>
-    </div>
-    <div class="row">
-      <div class="ref">{escape(title_suffix)}</div>
-      <div class="summary">{escape(subtitle)}</div>
-    </div>
-    <div class="grid">
-      {_table(positive, 'Top re‑use predictors')}
-      {_table(negative, 'Top no‑re‑use predictors')}
-    </div>
-    """.strip()
-
-    return render_shell(title=f"{site_title} — {title_suffix}", body_html=body)
 
 
-def _merge_spans(spans: list[tuple[int, int]], *, clip_end: int | None = None) -> list[tuple[int, int]]:
-    cleaned: list[tuple[int, int]] = []
-    for start_i, end_i in spans:
-        try:
-            s = int(start_i)
-            e = int(end_i)
-        except Exception:
-            continue
-        if clip_end is not None:
-            s = max(0, min(s, int(clip_end)))
-            e = max(0, min(e, int(clip_end)))
-        if s < 0 or e <= s:
-            continue
-        cleaned.append((s, e))
-
-    if not cleaned:
-        return []
-
-    cleaned.sort()
-    merged = [cleaned[0]]
-    for s, e in cleaned[1:]:
-        ps, pe = merged[-1]
-        if s <= pe:
-            merged[-1] = (ps, max(pe, e))
-        else:
-            merged.append((s, e))
-    return merged
 
 
-def _spans_total_len(spans: list[tuple[int, int]]) -> int:
-    return int(sum(e - s for (s, e) in spans))
 
 
-def _render_coverage_page(
-    *,
-    site_title: str,
-    threshold_desc: str,
-    herodian_total_chars: int,
-    herodian_covered_chars: int,
-    herodian_passages: int,
-    herodian_passages_reused: int,
-    top_herodian: list[dict],
-    stephanos_total_chars: int | None,
-    stephanos_covered_chars: int | None,
-    stephanos_lemmas: int | None,
-    stephanos_lemmas_reused: int | None,
-    stephanos_total_chars_reused_subset: int | None,
-    top_stephanos: list[dict],
-) -> str:
-    def pct(num: int | None, den: int | None) -> str:
-        if not num or not den:
-            return "—"
-        return f"{(num/den*100.0):.2f}%"
-
-    def fmt_int(n: int | None) -> str:
-        if n is None:
-            return "—"
-        return f"{int(n):,}"
-
-    def table_rows(items: list[dict], columns: list[tuple[str, str]]) -> str:
-        out = []
-        for it in items:
-            tds = []
-            for key, _label in columns:
-                val = it.get(key, "")
-                if key.endswith("_html"):
-                    tds.append(f"<td>{val}</td>")
-                else:
-                    tds.append(f"<td>{escape(str(val))}</td>")
-            out.append("<tr>" + "".join(tds) + "</tr>")
-        return "".join(out)
-
-    her_pct = pct(herodian_covered_chars, herodian_total_chars)
-    ste_pct = pct(stephanos_covered_chars, stephanos_total_chars)
-    ste_subset_pct = pct(stephanos_covered_chars, stephanos_total_chars_reused_subset)
-
-    her_table = f"""
-    <div class="table-wrap">
-      <table class="tbl">
-        <thead>
-          <tr><th colspan="2">Herodian → Stephanos coverage</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>Passages</td><td class="small">{fmt_int(herodian_passages)}</td></tr>
-          <tr><td>Passages with significant overlap</td><td class="small">{fmt_int(herodian_passages_reused)}</td></tr>
-          <tr><td>Total chars (Greek text)</td><td class="small">{fmt_int(herodian_total_chars)}</td></tr>
-          <tr><td>Covered chars (union of overlaps)</td><td class="small">{fmt_int(herodian_covered_chars)}</td></tr>
-          <tr><td>Estimated coverage</td><td class="small">{escape(her_pct)}</td></tr>
-        </tbody>
-      </table>
-    </div>
-    """.strip()
-
-    ste_table = f"""
-    <div class="table-wrap">
-      <table class="tbl">
-        <thead>
-          <tr><th colspan="2">Stephanos (Meineke) covered by Herodian</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>Lemmas (current Meineke texts)</td><td class="small">{fmt_int(stephanos_lemmas)}</td></tr>
-          <tr><td>Lemmas with significant overlap</td><td class="small">{fmt_int(stephanos_lemmas_reused)}</td></tr>
-          <tr><td>Total chars (all Meineke texts)</td><td class="small">{fmt_int(stephanos_total_chars)}</td></tr>
-          <tr><td>Covered chars (union of overlaps)</td><td class="small">{fmt_int(stephanos_covered_chars)}</td></tr>
-          <tr><td>Estimated coverage (overall)</td><td class="small">{escape(ste_pct)}</td></tr>
-          <tr><td>Estimated coverage (within overlapped lemmas)</td><td class="small">{escape(ste_subset_pct)}</td></tr>
-        </tbody>
-      </table>
-    </div>
-    """.strip()
-
-    top_herodian_rows = table_rows(
-        top_herodian,
-        [
-            ("ref_html", "Ref"),
-            ("coverage_pct", "Coverage"),
-            ("covered_chars", "Covered"),
-            ("total_chars", "Total"),
-        ],
-    )
-
-    top_stephanos_rows = table_rows(
-        top_stephanos,
-        [
-            ("label_html", "Lemma"),
-            ("coverage_pct", "Coverage"),
-            ("covered_chars", "Covered"),
-            ("total_chars", "Total"),
-        ],
-    )
-
-    body = f"""
-    <header>
-      <h1><a href="../index.html">{escape(site_title)}</a></h1>
-      <div class="meta"><span class="pill">Coverage</span> <span class="pill">{escape(threshold_desc)}</span></div>
-    </header>
-    <div class="controls">
-      <a class="btn" href="../index.html">← Index</a>
-      <a class="btn" href="index.html">Analysis</a>
-    </div>
-    <div class="grid">
-      {her_table}
-      {ste_table}
-    </div>
-    <div class="row">
-      <div class="summary">
-        Notes: coverage is computed using the union of stored overlap spans (0‑based, end‑exclusive) for matches meeting the threshold.
-        Because we keep only the top overlaps per passage and look for one longest contiguous block per pair, these numbers are conservative / lower‑bound estimates.
-      </div>
-    </div>
-    <h2>Most‑covered Herodian passages</h2>
-    <div class="table-wrap">
-      <table class="tbl">
-        <thead><tr><th>Ref</th><th>Coverage</th><th>Covered</th><th>Total</th></tr></thead>
-        <tbody>{top_herodian_rows}</tbody>
-      </table>
-    </div>
-    <h2>Most‑covered Stephanos lemmas</h2>
-    <div class="table-wrap">
-      <table class="tbl">
-        <thead><tr><th>Lemma</th><th>Coverage</th><th>Covered</th><th>Total</th></tr></thead>
-        <tbody>{top_stephanos_rows}</tbody>
-      </table>
-    </div>
-    """.strip()
-    return render_shell(title=f"{site_title} — Coverage", body_html=body)
 
 
-def _generate_analysis_pages(
-    *,
-    out_dir: Path,
-    site_title: str,
-    lines: list[dict],
-    overlaps_by_line: dict[int, list[dict]],
-    latest_run_id: int | None,
-    progress_data: dict | None,
-    reuse_char_lcs_min: int,
-    reuse_word_lcs_min: int,
-    top_k: int = 50,
-) -> None:
-    analysis_dir = out_dir / "analysis"
-    analysis_dir.mkdir(parents=True, exist_ok=True)
-
-    if progress_data is not None:
-        (analysis_dir / "progress.html").write_text(
-            _render_progress_page(site_title=site_title, progress_data=progress_data),
-            encoding="utf-8",
-        )
-
-    if not latest_run_id:
-        (analysis_dir / "index.html").write_text(
-            _render_analysis_index(
-                site_title=site_title,
-                summary_html="<div class='row'><div class='summary'><span class='pending'>No overlap run found yet.</span></div></div>",
-            ),
-            encoding="utf-8",
-        )
-        return
-
-    docs: list[str] = []
-    y: list[int] = []
-    significant_by_line: dict[int, list[dict]] = {}
-    for row in lines:
-        line_id = int(row["id"])
-        greek = row.get("greek_text") or ""
-        ovs = overlaps_by_line.get(line_id) or []
-        significant = [
-            ov
-            for ov in ovs
-            if (ov.get("char_lcs_len") or 0) >= reuse_char_lcs_min
-            and (ov.get("word_lcs_len") or 0) >= reuse_word_lcs_min
-        ]
-        if significant:
-            significant_by_line[line_id] = significant
-        reused = bool(significant)
-        docs.append(greek)
-        y.append(1 if reused else 0)
-
-    n_pos = sum(y)
-    n_total = len(y)
-    n_neg = n_total - n_pos
-
-    threshold_desc = f"reuse=1 if char≥{reuse_char_lcs_min} AND word≥{reuse_word_lcs_min} (run {latest_run_id})"
-
-    # Coverage analysis (no sklearn required)
-    herodian_total_chars = 0
-    herodian_covered_chars = 0
-    herodian_passages = 0
-    herodian_passages_reused = 0
-    herodian_rows_for_top: list[dict] = []
-
-    stephanos_spans_by_lemma: dict[int, list[tuple[int, int]]] = {}
-    stephanos_label_by_lemma: dict[int, str] = {}
-
-    for row in lines:
-        line_id = int(row["id"])
-        ref = str(row.get("ref") or "")
-        slug = ref_to_slug(ref)
-        text = row.get("greek_text") or ""
-        total_len = len(text)
-        herodian_passages += 1
-        herodian_total_chars += total_len
-
-        spans = []
-        for ov in significant_by_line.get(line_id, []):
-            s = _to_int(ov.get("herodian_char_start"))
-            e = _to_int(ov.get("herodian_char_end"))
-            if s is None or e is None:
-                continue
-            spans.append((s, e))
-
-            lemma_id = int(ov.get("stephanos_lemma_id") or 0)
-            if lemma_id:
-                ss = _to_int(ov.get("stephanos_char_start"))
-                ee = _to_int(ov.get("stephanos_char_end"))
-                if ss is not None and ee is not None:
-                    stephanos_spans_by_lemma.setdefault(lemma_id, []).append((ss, ee))
-                meineke_id = (ov.get("stephanos_meineke_id") or "").strip()
-                headword = (ov.get("stephanos_headword") or "").strip()
-                label = (f"{meineke_id} {headword}").strip() or f"lemma {lemma_id}"
-                stephanos_label_by_lemma.setdefault(lemma_id, label)
-
-        merged = _merge_spans(spans, clip_end=total_len)
-        covered = _spans_total_len(merged)
-        herodian_covered_chars += covered
-        if covered > 0:
-            herodian_passages_reused += 1
-
-        if total_len > 0:
-            ratio = covered / total_len
-        else:
-            ratio = 0.0
-        herodian_rows_for_top.append(
-            {
-                "ref_html": f'<a href="../passages/{escape(slug)}.html">{escape(ref)}</a>',
-                "coverage_pct": f"{ratio*100.0:.2f}%",
-                "covered_chars": f"{covered:,}",
-                "total_chars": f"{total_len:,}",
-                "_ratio": ratio,
-                "_covered": covered,
-            }
-        )
-
-    herodian_rows_for_top.sort(key=lambda d: (d.get("_ratio", 0.0), d.get("_covered", 0)), reverse=True)
-    top_herodian = herodian_rows_for_top[:25]
-
-    stephanos_total_chars = None
-    stephanos_covered_chars = None
-    stephanos_lemmas = None
-    stephanos_lemmas_reused = None
-    stephanos_total_chars_reused_subset = None
-    top_stephanos: list[dict] = []
-
-    try:
-        lemma_ids = sorted(stephanos_spans_by_lemma.keys())
-        if lemma_ids:
-            sconn = get_stephanos_connection(dict_cursor=True)
-            try:
-                with sconn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT
-                          COUNT(*) AS lemmas,
-                          COALESCE(SUM(LENGTH(text_body)), 0) AS total_chars
-                        FROM lemma_source_text_versions
-                        WHERE source_document = 'meineke'
-                          AND is_current = TRUE
-                          AND text_body IS NOT NULL
-                        """
-                    )
-                    row = cur.fetchone()
-                    stephanos_lemmas = int(row["lemmas"] or 0)
-                    stephanos_total_chars = int(row["total_chars"] or 0)
-
-                    cur.execute(
-                        """
-                        SELECT lemma_id, LENGTH(text_body) AS n_chars
-                        FROM lemma_source_text_versions
-                        WHERE source_document = 'meineke'
-                          AND is_current = TRUE
-                          AND text_body IS NOT NULL
-                          AND lemma_id = ANY(%s)
-                        """,
-                        (lemma_ids,),
-                    )
-                    lengths = {int(r["lemma_id"]): int(r["n_chars"] or 0) for r in cur.fetchall()}
-            finally:
-                sconn.close()
-
-            stephanos_lemmas_reused = len(lemma_ids)
-            stephanos_total_chars_reused_subset = sum(lengths.get(i, 0) for i in lemma_ids)
-            covered_sum = 0
-            rows = []
-            stephanos_base_url = _stephanos_base_url("https://stephanos.symmachus.org")
-            for lemma_id in lemma_ids:
-                spans = _merge_spans(stephanos_spans_by_lemma.get(lemma_id, []), clip_end=lengths.get(lemma_id))
-                covered = _spans_total_len(spans)
-                covered_sum += covered
-                total_len = lengths.get(lemma_id) or 0
-                ratio = (covered / total_len) if total_len else 0.0
-                label = stephanos_label_by_lemma.get(lemma_id) or f"lemma {lemma_id}"
-                url = stephanos_entry_url(base_url=stephanos_base_url, lemma_id=int(lemma_id))
-                rows.append(
-                    {
-                        "label_html": f'<a href="{escape(url)}" target="_blank" rel="noopener">{escape(label)}</a>',
-                        "coverage_pct": f"{ratio*100.0:.2f}%",
-                        "covered_chars": f"{covered:,}",
-                        "total_chars": f"{total_len:,}",
-                        "_ratio": ratio,
-                        "_covered": covered,
-                    }
-                )
-
-            stephanos_covered_chars = int(covered_sum)
-            rows.sort(key=lambda d: (d.get("_ratio", 0.0), d.get("_covered", 0)), reverse=True)
-            top_stephanos = rows[:25]
-    except Exception:
-        # Stephanos DB might not be reachable from some environments; keep Herodian-side stats.
-        stephanos_total_chars = None
-        stephanos_covered_chars = None
-        stephanos_lemmas = None
-        stephanos_lemmas_reused = None
-        stephanos_total_chars_reused_subset = None
-        top_stephanos = []
-
-    (analysis_dir / "coverage.html").write_text(
-        _render_coverage_page(
-            site_title=site_title,
-            threshold_desc=threshold_desc,
-            herodian_total_chars=int(herodian_total_chars),
-            herodian_covered_chars=int(herodian_covered_chars),
-            herodian_passages=int(herodian_passages),
-            herodian_passages_reused=int(herodian_passages_reused),
-            top_herodian=top_herodian,
-            stephanos_total_chars=stephanos_total_chars,
-            stephanos_covered_chars=stephanos_covered_chars,
-            stephanos_lemmas=stephanos_lemmas,
-            stephanos_lemmas_reused=stephanos_lemmas_reused,
-            stephanos_total_chars_reused_subset=stephanos_total_chars_reused_subset,
-            top_stephanos=top_stephanos,
-        ),
-        encoding="utf-8",
-    )
-
-    her_pct_str = (
-        f"{(herodian_covered_chars / herodian_total_chars * 100.0):.2f}%"
-        if herodian_total_chars
-        else "—"
-    )
-    ste_pct_str = (
-        f"{(stephanos_covered_chars / stephanos_total_chars * 100.0):.2f}%"
-        if stephanos_total_chars and stephanos_covered_chars is not None
-        else "—"
-    )
-    ste_subset_pct_str = (
-        f"{(stephanos_covered_chars / stephanos_total_chars_reused_subset * 100.0):.2f}%"
-        if stephanos_total_chars_reused_subset and stephanos_covered_chars is not None
-        else "—"
-    )
-    coverage_summary_html = (
-        "<div class='row'>"
-        "<div class='summary'>"
-        f"Herodian covered: <code>{escape(her_pct_str)}</code> "
-        f"({herodian_covered_chars:,}/{herodian_total_chars:,} chars; {herodian_passages_reused}/{herodian_passages} passages). "
-        f"Stephanos covered: <code>{escape(ste_pct_str)}</code> "
-        f"(overall; <code>{escape(ste_subset_pct_str)}</code> within overlapped lemmas)."
-        "</div>"
-        "</div>"
-    )
-
-    predictors_status = ""
-    try:
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        from sklearn.linear_model import LogisticRegression
-        from sklearn.pipeline import Pipeline
-    except Exception:
-        predictors_status = "<div class='row'><div class='summary'><span class='pending'>Install scikit-learn to generate TF‑IDF predictors.</span></div></div>"
-        (analysis_dir / "reuse_predictors_words.html").write_text(
-            _render_predictors_page(
-                site_title=site_title,
-                title_suffix="TF‑IDF + LogReg (words)",
-                subtitle=threshold_desc,
-                meta=["(unavailable)"],
-                positive=[],
-                negative=[],
-            ),
-            encoding="utf-8",
-        )
-        (analysis_dir / "reuse_predictors_ngrams_2_3.html").write_text(
-            _render_predictors_page(
-                site_title=site_title,
-                title_suffix="TF‑IDF + LogReg (word 2–3 grams)",
-                subtitle=threshold_desc,
-                meta=["(unavailable)"],
-                positive=[],
-                negative=[],
-            ),
-            encoding="utf-8",
-        )
-        (analysis_dir / "index.html").write_text(
-            _render_analysis_index(
-                site_title=site_title,
-                summary_html=(
-                    "<div class='row'>"
-                    f"<div class='summary'>Dataset: <code>{escape(threshold_desc)}</code> — {n_pos} reuse / {n_neg} no‑reuse.</div>"
-                    "</div>"
-                    + coverage_summary_html
-                    + predictors_status
-                ),
-            ),
-            encoding="utf-8",
-        )
-        return
-
-    def run_model(*, ngram_range: tuple[int, int], filename: str, label: str) -> None:
-        vectorizer = TfidfVectorizer(
-            preprocessor=_greek_casefold_strip,
-            token_pattern=r"(?u)\b[^\W\d_]{2,}\b",
-            ngram_range=ngram_range,
-            min_df=2,
-        )
-        clf = LogisticRegression(
-            C=1.0,
-            solver="liblinear",
-            max_iter=2000,
-        )
-        pipe = Pipeline([("tfidf", vectorizer), ("logreg", clf)])
-        pipe.fit(docs, y)
-
-        feature_names = pipe.named_steps["tfidf"].get_feature_names_out()
-        coefs = pipe.named_steps["logreg"].coef_[0]
-        pairs = list(zip(feature_names, coefs))
-        pairs.sort(key=lambda t: float(t[1]), reverse=True)
-        positive = [(t, float(c)) for (t, c) in pairs[:top_k]]
-        negative = [(t, float(c)) for (t, c) in pairs[-top_k:]][::-1]
-
-        (analysis_dir / filename).write_text(
-            _render_predictors_page(
-                site_title=site_title,
-                title_suffix=label,
-                subtitle=threshold_desc,
-                meta=[
-                    f"{n_total} docs",
-                    f"{n_pos} reuse",
-                    f"{n_neg} no‑reuse",
-                    f"ngram={ngram_range[0]}–{ngram_range[1]}",
-                    "logreg L2 (C=1.0)",
-                ],
-                positive=positive,
-                negative=negative,
-            ),
-            encoding="utf-8",
-        )
-
-    run_model(ngram_range=(1, 1), filename="reuse_predictors_words.html", label="TF‑IDF + LogReg (words)")
-    run_model(
-        ngram_range=(2, 3),
-        filename="reuse_predictors_ngrams_2_3.html",
-        label="TF‑IDF + LogReg (word 2–3 grams)",
-    )
-
-    (analysis_dir / "index.html").write_text(
-        _render_analysis_index(
-            site_title=site_title,
-            summary_html=(
-                "<div class='row'>"
-                f"<div class='summary'>Dataset: <code>{escape(threshold_desc)}</code> — {n_pos} reuse / {n_neg} no‑reuse.</div>"
-                "</div>"
-                + coverage_summary_html
-            ),
-        ),
-        encoding="utf-8",
-    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate static site from cathpros_lines.")
     parser.add_argument("--out", default="site", help="Output directory (default: site)")
-    parser.add_argument("--overlap-metric-version", default="v1", help="Overlap metric version to display (default: v1)")
-    parser.add_argument("--reuse-char-lcs-min", type=int, default=80, help="Reuse label threshold: min char LCS length (default: 80)")
-    parser.add_argument("--reuse-word-lcs-min", type=int, default=15, help="Reuse label threshold: min word LCS length (default: 15)")
     args = parser.parse_args()
 
     out_dir = Path(args.out)
@@ -1828,11 +933,7 @@ def main() -> None:
     passages_dir.mkdir(parents=True, exist_ok=True)
 
     conn = get_connection(dict_cursor=True)
-    latest_run_id = None
-    overlap_rows = []
     progress_row = None
-    latest_overlap_run_meta = None
-    overlap_avg_duration_seconds = None
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -1887,86 +988,6 @@ def main() -> None:
             )
             progress_row = cur.fetchone()
 
-            cur.execute(
-                """
-                SELECT
-                  id,
-                  created_at,
-                  finished_at,
-                  EXTRACT(EPOCH FROM (finished_at - created_at)) AS duration_seconds
-                FROM stephanos_overlap_runs
-                WHERE metric_version = %s
-                  AND finished_at IS NOT NULL
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (args.overlap_metric_version,),
-            )
-            run = cur.fetchone()
-            if run:
-                latest_run_id = int(run["id"])
-                latest_overlap_run_meta = {
-                    "id": latest_run_id,
-                    "created_at": run.get("created_at"),
-                    "finished_at": run.get("finished_at"),
-                    "duration_seconds": (
-                        float(run["duration_seconds"])
-                        if run.get("duration_seconds") is not None
-                        else None
-                    ),
-                }
-                cur.execute(
-                    """
-                    SELECT
-                      herodian_line_id,
-                      stephanos_lemma_id,
-                      stephanos_meineke_id,
-                      stephanos_headword,
-                      char_lcs_len,
-                      char_lcs_ratio,
-                      herodian_char_start,
-                      herodian_char_end,
-                      stephanos_char_start,
-                      stephanos_char_end,
-                      word_lcs_len,
-                      word_lcs_ratio,
-                      shared_char_shingles,
-                      shared_word_shingles
-                    FROM stephanos_overlap_matches
-                    WHERE run_id = %s
-                    ORDER BY herodian_line_id, char_lcs_ratio DESC, word_lcs_ratio DESC, char_lcs_len DESC
-                    """,
-                    (latest_run_id,),
-                )
-                overlap_rows = cur.fetchall()
-
-                cur.execute(
-                    """
-                    SELECT
-                      COUNT(*) AS match_count,
-                      COUNT(DISTINCT herodian_line_id) AS matched_lines
-                    FROM stephanos_overlap_matches
-                    WHERE run_id = %s
-                    """,
-                    (latest_run_id,),
-                )
-                run_counts = cur.fetchone()
-                if latest_overlap_run_meta is not None and run_counts is not None:
-                    latest_overlap_run_meta["match_count"] = int(run_counts["match_count"] or 0)
-                    latest_overlap_run_meta["matched_lines"] = int(run_counts["matched_lines"] or 0)
-
-            cur.execute(
-                """
-                SELECT AVG(EXTRACT(EPOCH FROM (finished_at - created_at))) AS avg_duration_seconds
-                FROM stephanos_overlap_runs
-                WHERE metric_version = %s
-                  AND finished_at IS NOT NULL
-                """,
-                (args.overlap_metric_version,),
-            )
-            avg_row = cur.fetchone()
-            if avg_row is not None and avg_row.get("avg_duration_seconds") is not None:
-                overlap_avg_duration_seconds = float(avg_row["avg_duration_seconds"])
     finally:
         conn.close()
 
@@ -1992,7 +1013,6 @@ def main() -> None:
         "total": int(stats_row["total"] or 0),
         "translated": int(stats_row["translated"] or 0),
         "summarized": int(stats_row["summarized"] or 0),
-        "latest_overlap_run_id": latest_run_id,
     }
 
     source_tsv_path = Path("HerodianCathPros.txt")
@@ -2036,91 +1056,9 @@ def main() -> None:
         ).get("latest_gadget_generated_at"),
         "source_tsv_rows": source_tsv_rows,
         "source_tsv_path": str(source_tsv_path),
-        "latest_overlap_run": latest_overlap_run_meta,
-        "latest_overlap_duration_seconds": (
-            latest_overlap_run_meta.get("duration_seconds")
-            if latest_overlap_run_meta is not None
-            else None
-        ),
-        "latest_overlap_match_count": (
-            latest_overlap_run_meta.get("match_count")
-            if latest_overlap_run_meta is not None
-            else None
-        ),
-        "latest_overlap_matched_lines": (
-            latest_overlap_run_meta.get("matched_lines")
-            if latest_overlap_run_meta is not None
-            else None
-        ),
-        "overlap_avg_duration_seconds": overlap_avg_duration_seconds,
     }
 
     (out_dir / "style.css").write_text(STYLE_CSS.strip() + "\n", encoding="utf-8")
-
-    overlaps_by_line: dict[int, list[dict]] = {}
-    for ov in overlap_rows:
-        overlaps_by_line.setdefault(int(ov["herodian_line_id"]), []).append(
-            {
-                "stephanos_lemma_id": int(ov["stephanos_lemma_id"]),
-                "stephanos_meineke_id": ov.get("stephanos_meineke_id"),
-                "stephanos_headword": ov.get("stephanos_headword"),
-                "char_lcs_len": int(ov["char_lcs_len"]),
-                "char_lcs_ratio": float(ov["char_lcs_ratio"]),
-                "herodian_char_start": ov.get("herodian_char_start"),
-                "herodian_char_end": ov.get("herodian_char_end"),
-                "stephanos_char_start": ov.get("stephanos_char_start"),
-                "stephanos_char_end": ov.get("stephanos_char_end"),
-                "word_lcs_len": int(ov["word_lcs_len"]),
-                "word_lcs_ratio": float(ov["word_lcs_ratio"]),
-            }
-        )
-
-    for ovs in overlaps_by_line.values():
-        ovs.sort(
-            key=lambda o: (
-                int(o.get("char_lcs_len") or 0),
-                int(o.get("word_lcs_len") or 0),
-                float(o.get("char_lcs_ratio") or 0.0),
-                float(o.get("word_lcs_ratio") or 0.0),
-            ),
-            reverse=True,
-        )
-
-    top_overlap_by_line: dict[int, dict] = {}
-    for line_id, ovs in overlaps_by_line.items():
-        if ovs:
-            top_overlap_by_line[line_id] = ovs[0]
-
-    # Fetch Stephanos texts for the overlap candidates we will show.
-    stephanos_text_by_lemma_id: dict[int, dict] = {}
-    lemma_ids = sorted({ov["stephanos_lemma_id"] for ovs in overlaps_by_line.values() for ov in ovs[:10]})
-    if lemma_ids:
-        try:
-            sconn = get_stephanos_connection(dict_cursor=True)
-            try:
-                with sconn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT l.id AS lemma_id, l.lemma AS headword, l.meineke_id, v.text_body
-                        FROM assembled_lemmas l
-                        JOIN lemma_source_text_versions v ON v.lemma_id = l.id
-                        WHERE v.source_document = 'meineke'
-                          AND v.is_current = TRUE
-                          AND l.id = ANY(%s)
-                        """,
-                        (lemma_ids,),
-                    )
-                    for row in cur.fetchall():
-                        stephanos_text_by_lemma_id[int(row["lemma_id"])] = {
-                            "headword": row.get("headword"),
-                            "meineke_id": row.get("meineke_id"),
-                            "text_body": row.get("text_body"),
-                        }
-            finally:
-                sconn.close()
-        except Exception:
-            # If Stephanos DB isn't reachable, just skip embedding text.
-            stephanos_text_by_lemma_id = {}
 
     (out_dir / "passages.json").write_text(
         json.dumps(
@@ -2140,7 +1078,7 @@ def main() -> None:
 
     site_title = _site_title("Prosodia Catholica (Herodian)")
     (out_dir / "index.html").write_text(
-        render_index(title=site_title, stats=stats, lines=lines, top_overlap_by_line=top_overlap_by_line),
+        render_index(title=site_title, stats=stats, lines=lines),
         encoding="utf-8",
     )
 
@@ -2151,15 +1089,14 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    _generate_analysis_pages(
-        out_dir=out_dir,
-        site_title=site_title,
-        lines=lines,
-        overlaps_by_line=overlaps_by_line,
-        latest_run_id=latest_run_id,
-        progress_data=progress_data,
-        reuse_char_lcs_min=int(args.reuse_char_lcs_min),
-        reuse_word_lcs_min=int(args.reuse_word_lcs_min),
+    analysis_dir = out_dir / "analysis"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    # Remove only generated pages belonging to the retired feature. Do not touch
+    # database history, source archives, or unrelated output files.
+    for filename in ("index.html", "coverage.html", "reuse_predictors_words.html", "reuse_predictors_ngrams_2_3.html"):
+        (analysis_dir / filename).unlink(missing_ok=True)
+    (analysis_dir / "progress.html").write_text(
+        _render_progress_page(site_title=site_title, progress_data=progress_data), encoding="utf-8"
     )
 
     for row in lines:
@@ -2175,8 +1112,6 @@ def main() -> None:
                 gadget_html=row.get("gadget_html"),
                 gadget_css=row.get("gadget_css"),
                 gadget_js=row.get("gadget_js"),
-                overlaps=(overlaps_by_line.get(row["id"]) or [])[:10],
-                stephanos_text_by_lemma_id=stephanos_text_by_lemma_id,
             ),
             encoding="utf-8",
         )

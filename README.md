@@ -12,26 +12,19 @@ This project started from the following note (email from Brady Kiesling):
 > the phrases that match. To be safe, you'd need to ignore accents and particles, but not
 > impossible... Then flag the overlap as a percentage of Meineke....
 
-## Working hypothesis
+## Current purpose
 
-A substantial portion of the Stephanus of Byzantium tradition ("StephByz", esp. Meineke) overlaps with / is salvaged from Herodian's *De Prosodia Catholica*.
-
-## Concrete next step (analysis idea)
-
-Write a script that:
-
-- takes StephByz headwords (e.g. from Meineke or a derived dataset),
-- searches the Herodian Greek text (e.g. `HerodianCathPros.txt`) for matching headwords / phrases,
-- normalizes Greek for matching (at minimum: ignore accents; optionally ignore common particles),
-- extracts candidate matching phrases for review, and
-- reports overlap statistics (e.g. percent of headwords/entries with candidates).
+Translate and present the Lentz reconstruction, with educational gadgets.
+The former Herodian–Stephanos comparison is retired: the reconstructed text is
+not independent evidence for the relationship the comparison tried to measure.
+Historical overlap data remains untouched in the database, but is no longer
+computed, queried or displayed by this project.
 
 ## Current pipeline (DB → translation → static site)
 
 This repo includes a small PostgreSQL-backed pipeline to:
 - translate a few more lines per day with OpenAI (`gpt-6-sol` by default)
 - summarize passages into short index labels with OpenAI (`gpt-5.6-luna` by default)
-- compute overlaps vs Stephanos (Meineke) into `stephanos_overlap_*`
 - generate a static website into `site/`
 - deploy it to `merah:/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs`
 
@@ -53,20 +46,16 @@ This repo includes a small PostgreSQL-backed pipeline to:
 5. Summarize a small batch (for the index page):
    - `uv run summarize_lines.py --limit 25`
 
-6. (Optional) Compute overlaps vs Stephanos (requires DB grants):
-   - `uv run compute_overlaps.py`
-
-7. Generate the site:
+6. Generate the site:
    - `uv run generate_site.py`
 
-8. Deploy:
+7. Deploy:
    - `rsync -az --delete site/ merah:/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs/`
 
 The site is generated as:
 - `site/index.html` (index)
 - `site/passages/<ref>.html` (one page per passage)
 - `site/analysis/progress.html` (cron-task progress + ETA by task)
-- `site/analysis/coverage.html` and predictor pages (reuse analysis)
 
 ### Daily cron (raksasa)
 
@@ -81,12 +70,13 @@ Install the daily pipeline:
 
 The cron job runs `./run_daily_pipeline.sh` once per day and writes logs under `logs/`.
 
-## Stephanos DB grants (raksasa)
+## Database boundary
 
-`compute_overlaps.py` reads the current Meineke source text from the Stephanos DB. Run in `psql -d stephanos`:
+The working passage text, translations, summaries and gadgets still use the
+Herodian database. The site generator and pipeline no longer read the Stephanos
+database. Existing overlap tables/history and existing database permissions have
+not been dropped or revoked. The static public site needs no visitor-time DB.
 
-```sql
-GRANT CONNECT ON DATABASE stephanos TO herodian;
-GRANT USAGE ON SCHEMA public TO herodian;
-GRANT SELECT ON public.assembled_lemmas, public.lemma_source_text_versions TO herodian;
-```
+A future Git content migration can therefore be self-contained without importing
+the Stephanos corpus. It still needs a reviewed public-field boundary, a file
+storage adapter, deterministic serialization and render-parity validation.

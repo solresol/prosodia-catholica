@@ -1,3 +1,7 @@
+> Retired feature: the pipeline and site no longer compute/read/display these results.
+> This document describes preserved legacy tables only; it is not current setup guidance.
+> No historical rows, archives or permissions were removed by feature retirement.
+
 # Using the Herodian ↔ Stephanos overlap data
 
 This repository computes overlaps between:

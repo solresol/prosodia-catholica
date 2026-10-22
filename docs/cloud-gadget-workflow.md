@@ -1,3 +1,7 @@
+> Current scope update: automated Herodian–Stephanos comparison and its output are retired.
+> References below to preserving that stage record the earlier gadget cutover only;
+> they do not authorize restoring it. Core gadget authoring/import remains unchanged.
+
 # Staged minimal Herodian split
 
 ## Architecture and activation boundary

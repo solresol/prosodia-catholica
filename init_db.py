@@ -56,52 +56,7 @@ CREATE INDEX IF NOT EXISTS cathpros_lines_gadget_pending_idx
   ON cathpros_lines (id)
   WHERE gadget_html IS NULL;
 
-CREATE TABLE IF NOT EXISTS stephanos_overlap_runs (
-  id BIGSERIAL PRIMARY KEY,
-  metric_version TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  finished_at TIMESTAMPTZ,
-  stephanos_lemmas_count INTEGER,
-  stephanos_meineke_current_count INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS stephanos_overlap_matches (
-  id BIGSERIAL PRIMARY KEY,
-  run_id BIGINT NOT NULL REFERENCES stephanos_overlap_runs(id) ON DELETE CASCADE,
-  herodian_line_id BIGINT NOT NULL REFERENCES cathpros_lines(id) ON DELETE CASCADE,
-  stephanos_lemma_id INTEGER NOT NULL,
-  stephanos_meineke_id TEXT,
-  stephanos_headword TEXT,
-  char_lcs_len INTEGER NOT NULL,
-  char_lcs_ratio REAL NOT NULL,
-  herodian_char_start INTEGER,
-  herodian_char_end INTEGER,
-  stephanos_char_start INTEGER,
-  stephanos_char_end INTEGER,
-  word_lcs_len INTEGER NOT NULL,
-  word_lcs_ratio REAL NOT NULL,
-  shared_char_shingles INTEGER,
-  shared_word_shingles INTEGER,
-  computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (run_id, herodian_line_id, stephanos_lemma_id)
-);
-
-CREATE INDEX IF NOT EXISTS stephanos_overlap_matches_line_idx
-  ON stephanos_overlap_matches (run_id, herodian_line_id);
-
-CREATE INDEX IF NOT EXISTS stephanos_overlap_matches_lemma_idx
-  ON stephanos_overlap_matches (run_id, stephanos_lemma_id);
-
-ALTER TABLE stephanos_overlap_matches ADD COLUMN IF NOT EXISTS herodian_char_start INTEGER;
-ALTER TABLE stephanos_overlap_matches ADD COLUMN IF NOT EXISTS herodian_char_end INTEGER;
-ALTER TABLE stephanos_overlap_matches ADD COLUMN IF NOT EXISTS stephanos_char_start INTEGER;
-ALTER TABLE stephanos_overlap_matches ADD COLUMN IF NOT EXISTS stephanos_char_end INTEGER;
-
--- Allow Stephanos read-only access to Herodian overlap data.
-GRANT USAGE ON SCHEMA public TO stephanos;
-GRANT SELECT ON cathpros_lines TO stephanos;
-GRANT SELECT ON stephanos_overlap_runs TO stephanos;
-GRANT SELECT ON stephanos_overlap_matches TO stephanos;
+-- Existing retired overlap tables/history are intentionally left untouched.
 """
 
 
@@ -113,7 +68,7 @@ def main() -> None:
                 cur.execute(DDL)
     finally:
         conn.close()
-    print("OK: ensured schema exists (cathpros_lines, stephanos overlaps).")
+    print("OK: ensured schema exists (cathpros_lines).")
 
 
 if __name__ == "__main__":
