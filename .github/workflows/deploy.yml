@@ -1,0 +1,45 @@
+name: Herodian deployment
+on:
+  schedule:
+    # Hourly polling covers delayed/missed dispatch; Sydney daily receipts ensure
+    # maintenance runs once after 01:00 in either DST offset.
+    - cron: '17 * * * *'
+  repository_dispatch:
+    types: [gadget-result]
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [publish, daily]
+        default: publish
+        description: Publish/import only, or daily source maintenance
+        required: true
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: herodian-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    # Remains off until the runner/access blocker is explicitly approved and a
+    # manual production publication passes while cron remains active.
+    if: github.repository == 'solresol/prosodia-catholica' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.HERODIAN_CI_ENABLED == 'true')
+    runs-on: [self-hosted, linux, X64, prosodia-catholica]
+    steps:
+      - name: Run existing local route at the exact trusted commit
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+          REQUESTED_MODE: ${{ inputs.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode=publish
+          if [[ "$EVENT" == schedule ]] && (( $(TZ=Australia/Sydney date +%-H) >= 1 )); then
+            mode=daily
+          elif [[ "$EVENT" == workflow_dispatch ]]; then
+            mode="$REQUESTED_MODE"
+          fi
+          bash "${HERODIAN_DEPLOY_ROOT:?approved local checkout setting required}/ci/run_deploy.sh" "$SOURCE_SHA" "$mode"
