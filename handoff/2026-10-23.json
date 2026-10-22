@@ -1,6 +1,6 @@
 {
   "ack": null,
-  "claim": null,
+  "claim": "b89450b5-aeb2-4298-9ff2-1535ba2bd96b",
   "mode": "production",
   "request": {
     "day": "2026-10-23",
