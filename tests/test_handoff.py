@@ -92,6 +92,33 @@ class HandoffTests(unittest.TestCase):
             _, returned = handoff.submit(record, 'worker', res)
             self.assertEqual(returned, gadgets.digest(res))
 
+    def test_import_observation_is_the_read_snapshot_not_its_ack_commit(self):
+        import contextlib
+        import io
+        import types
+        with tempfile.TemporaryDirectory() as d:
+            bare = Path(d) / 'remote.git'
+            subprocess.run(['git', 'init', '-q', '--bare', str(bare)], check=True)
+            env = dict(os.environ, GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@example.invalid', GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@example.invalid')
+            with patch.dict(os.environ, env):
+                req = request()
+                queue = handoff.GitQueue(str(bare))
+                queue.transact(lambda r: handoff.enqueue(r, req))
+                queue.transact(lambda r: handoff.claim(r, 'worker'))
+                queue.transact(lambda r: handoff.submit(r, 'worker', result(req)))
+                before = subprocess.check_output(['git', '--git-dir', str(bare), 'rev-parse', handoff.BRANCH], text=True).strip()
+                receipt = Path(d) / 'observation.json'
+                cls = handoff.GitQueue
+                def local_queue(**kwargs):
+                    return cls(remote=str(bare), **kwargs)
+                public_info = io.StringIO(json.dumps({'full_name':'solresol/prosodia-catholica','private':False}))
+                with patch.object(handoff, 'GitQueue', side_effect=local_queue), patch.object(handoff, 'urlopen', return_value=public_info), patch.dict(sys.modules, {'db':types.SimpleNamespace(get_connection=lambda:FakeConnection(FakeCursor(req)))}), patch.object(sys, 'argv', ['git_gadget_handoff.py','import-ready','--observation-file',str(receipt)]), contextlib.redirect_stdout(io.StringIO()):
+                    handoff.main()
+                observed = json.loads(receipt.read_text())
+                after = subprocess.check_output(['git', '--git-dir', str(bare), 'rev-parse', handoff.BRANCH], text=True).strip()
+                self.assertEqual(observed, {'observed_ref':before,'outcome':'imported'})
+                self.assertNotEqual(before, after)  # ack push is not a consumed input
+
     def test_sydney_dst_and_logical_midnight(self):
         start, end = gadgets.day_bounds('2026-10-04')
         self.assertEqual(end.timestamp() - start.timestamp(), 23*3600)

@@ -8,14 +8,16 @@ mode=${2:-publish}
 case "$mode" in daily|publish) ;; *) exit 2;; esac
 root=${HERODIAN_DEPLOY_ROOT:-}
 account=${HERODIAN_DEPLOY_USER:-}
-if [[ -z "$root" || -z "$account" || $(id -un) != "$account" || ! -d "$root/.git" ]]; then
+if [[ -z "$root" || -z "$account" || $(id -un 2>/dev/null) != "$account" || ! -d "$root/.git" ]]; then
   echo 'Approved local deployment configuration is required' >&2
   exit 77
 fi
 cd "$root" 2>/dev/null || exit 77
 mkdir -p logs 2>/dev/null || exit 77
-exec 9>logs/pipeline.lock
-log=$(mktemp logs/ci-run.XXXXXXXX.log)
+if ! log=$(mktemp logs/ci-run.XXXXXXXX.log 2>/dev/null); then
+  echo 'Cannot prepare private deployment diagnostics' >&2
+  exit 77
+fi
 exec 8>&1
 unchanged=0
 finish() {
@@ -35,6 +37,7 @@ finish() {
 }
 trap finish EXIT
 deploy() {
+  exec 9>logs/pipeline.lock
   flock -w 300 9
   [[ $(git remote get-url origin) == git@github.com:solresol/prosodia-catholica.git ]]
   [[ $(git branch --show-current) == main && -z $(git status --porcelain) ]]
@@ -50,7 +53,8 @@ deploy() {
     unchanged=1
     return 0
   fi
-  HERODIAN_LOCK_INHERITED=1 HERODIAN_EXPECTED_SHA="$expected" ./run_daily_pipeline.sh "$mode"
+  observation=$(mktemp logs/import-observation.XXXXXXXX.json)
+  HERODIAN_LOCK_INHERITED=1 HERODIAN_EXPECTED_SHA="$expected" HERODIAN_IMPORT_OBSERVATION="$observation" ./run_daily_pipeline.sh "$mode"
   local_hash=$(sha256sum site/ci-deployment.json | cut -d' ' -f1)
   target=$(python3 -c 'import config; print(config.DEPLOY_HOST)')
   destination=$(python3 -c 'import config; print(config.DEPLOY_PATH)')
@@ -58,8 +62,11 @@ deploy() {
   [[ "$target" =~ ^[a-zA-Z0-9_.-]+$ && "$destination" =~ ^/[a-zA-Z0-9_./-]+$ ]]
   remote_hash=$(ssh -o BatchMode=yes "$target" sha256 -q "$destination/ci-deployment.json")
   [[ "$local_hash" == "$remote_hash" ]]
-  data_ref=$(git ls-remote origin refs/heads/gadget-handoff | cut -f1)
-  printf '%s\n' "$expected $day $data_ref" > logs/ci-published.tmp
+  # Bind publication to the snapshot actually read by import-ready, never a
+  # later branch tip. An arrival during rendering/rsync must trigger another poll.
+  consumed_ref=$(python3 -c 'import json,re,sys; value=json.load(open(sys.argv[1]))["observed_ref"]; assert value is None or re.fullmatch(r"[0-9a-f]{40}",value); print(value or "")' "$observation")
+  printf '%s\n' "$expected $day $consumed_ref" > logs/ci-published.tmp
   mv logs/ci-published.tmp logs/ci-published
+  rm -f "$observation"
 }
 deploy >"$log" 2>&1

@@ -22,24 +22,89 @@ concurrency:
   group: herodian-production
   cancel-in-progress: false
 jobs:
-  deploy:
-    # Remains off until the runner/access blocker is explicitly approved and a
-    # manual production publication passes while cron remains active.
+  checks:
     if: github.repository == 'solresol/prosodia-catholica' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.HERODIAN_CI_ENABLED == 'true')
-    runs-on: [self-hosted, linux, X64, prosodia-catholica]
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
     steps:
-      - name: Run existing local route at the exact trusted commit
+      - name: Read exact public source commit
+        id: source
         env:
           SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git init -q .
+          git remote add origin https://github.com/solresol/prosodia-catholica.git
+          git fetch --depth=1 origin "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Checks required for this exact deployment SHA
+        run: |
+          python3 -m unittest discover -s tests -v
+          bash -n run_daily_pipeline.sh ci/run_deploy.sh
+  deploy:
+    needs: checks
+    # Every trigger uses the same checks dependency, including manual/scheduled.
+    if: needs.checks.result == 'success' && needs.checks.outputs.source_sha == github.sha && github.repository == 'solresol/prosodia-catholica' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.HERODIAN_CI_ENABLED == 'true')
+    runs-on: [self-hosted, linux, X64, prosodia-catholica]
+    steps:
+      - name: Run existing local route at the exact checked commit
+        env:
+          SOURCE_SHA: ${{ needs.checks.outputs.source_sha }}
           EVENT: ${{ github.event_name }}
           REQUESTED_MODE: ${{ inputs.mode }}
         shell: bash
         run: |
-          set -euo pipefail
-          mode=publish
-          if [[ "$EVENT" == schedule ]] && (( $(TZ=Australia/Sydney date +%-H) >= 1 )); then
-            mode=daily
-          elif [[ "$EVENT" == workflow_dispatch ]]; then
-            mode="$REQUESTED_MODE"
-          fi
-          bash "${HERODIAN_DEPLOY_ROOT:?approved local checkout setting required}/ci/run_deploy.sh" "$SOURCE_SHA" "$mode"
+          python3 - <<'PY'
+          import datetime, os, pathlib, re, subprocess, sys, tempfile
+          from zoneinfo import ZoneInfo
+
+          def main():
+              diagnostic = None
+              status = 77
+              try:
+                  sha = os.environ['SOURCE_SHA']
+                  if not re.fullmatch(r'[0-9a-f]{40}', sha):
+                      raise ValueError('Invalid source identity')
+                  mode = 'publish'
+                  event = os.environ.get('EVENT', '')
+                  if event == 'schedule' and datetime.datetime.now(ZoneInfo('Australia/Sydney')).hour >= 1:
+                      mode = 'daily'
+                  elif event == 'workflow_dispatch':
+                      mode = os.environ.get('REQUESTED_MODE', '')
+                  if mode not in ('daily', 'publish'):
+                      raise ValueError('Invalid requested mode')
+                  with tempfile.NamedTemporaryFile(prefix='deployment-launch-', suffix='.log',
+                                                   dir=os.environ.get('RUNNER_TEMP'), mode='w', encoding='utf-8', delete=False) as log:
+                      diagnostic = pathlib.Path(log.name)
+                      root = os.environ.get('HERODIAN_DEPLOY_ROOT', '')
+                      if not root:
+                          log.write('Approved local deployment root is not configured\n')
+                          raise ValueError('Approved local configuration required')
+                      try:
+                          ran = subprocess.run(['bash', str(pathlib.Path(root) / 'ci/run_deploy.sh'), sha, mode],
+                                               stdout=log, stderr=subprocess.STDOUT, check=False)
+                      except Exception:
+                          import traceback
+                          traceback.print_exc(file=log)
+                          raise
+                  status = ran.returncode if ran.returncode >= 0 else 128 - ran.returncode
+                  if status:
+                      raise RuntimeError('Local deployment failed')
+                  # Never replay arbitrary captured text to public job logs.
+                  allowed = [line for line in diagnostic.read_text().splitlines()
+                             if re.fullmatch(r'Publication verified: source=' + sha + r' manifest_sha256=[0-9a-f]{64}', line)
+                             or line == 'No changes since verified publication of ' + sha]
+                  if not allowed:
+                      status = 1
+                      raise RuntimeError('No verified public attestation')
+                  print(allowed[-1])
+                  diagnostic.unlink()
+                  return 0
+              except Exception:
+                  print('Deployment failed (exit %s); inspect private local diagnostics' % (status or 1))
+                  return status or 1
+
+          sys.exit(main())
+          PY

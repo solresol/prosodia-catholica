@@ -77,3 +77,36 @@ existing queue/import idempotency and invalid deployment-commit rejection.
 Optional isolated PostgreSQL tests remain available. No production deployment
 through the proposed runner has succeeded yet; registration/access approval is
 still a prerequisite. The existing production schedule remains unchanged.
+
+## Pre-cutover review regressions
+
+Every deployment trigger now depends on checks in the same workflow for the exact
+source SHA; a failed check cannot deploy. The wrapper still requires its checked
+commit after fast-forward, so advancing main cannot silently substitute untested
+source.
+
+Publication receipts use the immutable snapshot actually read by import-ready,
+recorded through a local observation file. They never adopt a later remote branch
+HEAD after rendering/publication. A result arriving during that interval therefore
+invalidates the next poll's key; it cannot be marked consumed accidentally. A
+local ack or enqueue can conservatively cause an extra poll, which is preferable
+to suppressing unconsumed work. Observation files contain only commit/outcome
+metadata and remain local.
+
+Daily source work invalidates any older publication receipt before its first
+mutation. A completed daily-work receipt covers source work only. If publication
+then fails, the next poll must retry import/build/publication, while the daily
+receipt prevents duplicate maintenance/model calls.
+
+The workflow launcher captures diagnostics before it tries the configured wrapper
+path. It emits only a strictly allowlisted public source/manifest attestation or
+bounded failure status; private paths and arbitrary captured output are never
+replayed. The wrapper likewise opens its lock only inside captured diagnostics.
+Missing-wrapper and denied-lock failures retain actionable private logs.
+
+Deterministic full-wrapper regressions cover a result arriving between preflight,
+actual import and publication, plus early publish/daily mutation/build failure/
+successful retry. Additional tests exercise actual import-read versus ack commits,
+all-trigger exact-SHA check wiring, missing private wrapper paths, denied lock
+opens and suppression of unrelated output alongside a valid attestation. These
+are isolated tests, not a production deployment or authorization for cutover.

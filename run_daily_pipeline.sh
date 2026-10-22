@@ -46,6 +46,10 @@ else
 fi
 
 if (( DAILY_WORK )); then
+  # A prior publish-only receipt no longer describes the DB after daily writes.
+  # Invalidate before any mutation; a later build failure must retry publication
+  # without repeating source work already covered by the daily done receipt.
+  rm -f logs/ci-published
   date --iso-8601=seconds > "logs/daily-${DATE}.started"
 echo "Step 1: init DB schema..." | tee -a "$LOGFILE"
 uv run init_db.py 2>&1 | tee -a "$LOGFILE"
@@ -81,7 +85,11 @@ case "$GADGET_WORKFLOW" in
     ;;
   cloud)
     echo "Step 2bb: import any tested cloud gadget result..." | tee -a "$LOGFILE"
-    uv run git_gadget_handoff.py import-ready 2>&1 | tee -a "$LOGFILE" || GADGET_STATUS=$?
+    IMPORT_ARGS=(import-ready)
+    if [[ -n "${HERODIAN_IMPORT_OBSERVATION:-}" ]]; then
+      IMPORT_ARGS+=(--observation-file "$HERODIAN_IMPORT_OBSERVATION")
+    fi
+    uv run git_gadget_handoff.py "${IMPORT_ARGS[@]}" 2>&1 | tee -a "$LOGFILE" || GADGET_STATUS=$?
     ;;
   *) echo "Unknown GADGET_WORKFLOW: $GADGET_WORKFLOW" >&2; return 2 ;;
 esac

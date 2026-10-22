@@ -79,6 +79,7 @@ class GitQueue:
         self.remote = remote if remote is not None else resolve_remote(Path(__file__).resolve().parent)
         self.day = day or logical_day()
         self.pending = pending
+        self.observed_ref = None
         if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', self.day):
             raise ValueError('Invalid day')
 
@@ -93,7 +94,9 @@ class GitQueue:
                 if refs.returncode == 0:
                     run('git', 'fetch', '-q', 'origin', 'refs/heads/'+BRANCH, cwd=root)
                     run('git', 'checkout', '-q', '-b', BRANCH, 'FETCH_HEAD', cwd=root)
+                    self.observed_ref = run('git', 'rev-parse', 'HEAD', cwd=root).stdout.strip()
                 elif refs.returncode == 2:
+                    self.observed_ref = None
                     run('git', 'checkout', '-q', '--orphan', BRANCH, cwd=root)
                 else:
                     raise RuntimeError(refs.stderr)
@@ -195,9 +198,12 @@ def main():
     parser.add_argument('--published-file', type=Path)
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--worker')
+    parser.add_argument('--observation-file', type=Path, help='local import-read snapshot receipt')
     parser.add_argument('--rehearsal', action='store_true', help='enqueue only; result can never be imported')
     parser.add_argument('--day', help='Explicit Sydney request day; otherwise resume oldest pending production work')
     args = parser.parse_args()
+    if args.observation_file and args.action not in ('import', 'import-ready'):
+        parser.error('--observation-file is only for local import')
     # Verify the existing destination before any data-branch read/write.
     with urlopen('https://api.github.com/repos/solresol/prosodia-catholica', timeout=15) as response:
         info = json.load(response)
@@ -245,6 +251,8 @@ def main():
     elif args.action in ('import', 'import-ready'):
         from db import get_connection
         output = queue.transact(lambda r: import_result(r, get_connection, if_ready=args.action == 'import-ready'))
+        if args.observation_file:
+            args.observation_file.write_text(json.dumps({'observed_ref': queue.observed_ref, 'outcome': output})+'\n')
     else:
         def status(record):
             if record is None:
