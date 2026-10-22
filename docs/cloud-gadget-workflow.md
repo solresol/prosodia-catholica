@@ -89,8 +89,8 @@ ack push fails, retry verifies `gadget_model = codex-cloud:SHA256(request)` and
 full candidate/source equality before acknowledging without another update.
 Further source edits cause a stale failure, never overwrite. Git mutations use
 isolated temporary checkouts, normal guarded pushes and at most three race
-reloads; no force pushes or rebases. Real transaction rollback/concurrent DB
-behavior has not been tested against production; current DB tests use fakes.
+reloads; no force pushes or rebases. Real rollback, stale-write rollback and transaction-lock contention were verified
+against a tiny isolated PostgreSQL 16 cluster; no production DB writes were made.
 
 Transition must still verify **no old-version generator process is running**
 before enabling cloud mode/import. Old production processes do not retroactively
@@ -112,7 +112,8 @@ before returning to legacy to avoid generating a second gadget that day.
   HTTPS fetch received Cloudflare 1010; exact deployed-file equality was verified
   with the existing authorized Merah deployment identity instead.
 - Prepared in isolated `/tmp/prosodia-git-rehearsal-20261022`; production checkout,
-  cron and DB contents unchanged. Latest HTTPS read found it unclaimed/no result.
+  cron and DB contents unchanged. The cloud round trip subsequently succeeded at data commit
+  `6d5e856b8e071d656f4a3e1fdd7653ccd92c968a` (see verification below).
 
 From latest staged source with the cloud's existing verified HTTPS origin:
 
@@ -176,10 +177,11 @@ local. Use the existing verified HTTPS origin and existing Git credentials; do
 not change remotes, SSH config, credentials, grants or security settings. No
 PostgreSQL, VPN, production SSH, schema jobs or site deployment from cloud.
 
-Run python3 -m unittest discover -s tests -v. Inspect git_gadget_handoff.py status.
+Run python3 -m unittest discover -s tests -v. Inspect python3 git_gadget_handoff.py status.
 Resume its oldest pending Sydney assignment, even if older than today. If result
 already exists, report waiting for local import and stop without reauthoring.
-For rehearsal, explicitly use --day 2026-10-22 for status/claim; its ID is known.
+This recurring production job must not select, promote or import a rehearsal
+record. If no production request exists, report it and stop without generation.
 Create/save a unique opaque author worker UUID in ignored exports/ and reuse it
 for retries. Claim with git_gadget_handoff.py claim --worker UUID --bundle
 exports/gadgets.json (plus rehearsal --day when applicable). Claim push must
@@ -220,5 +222,80 @@ Unit/local-Git tests cover normalized remotes, real local Git claim races, delay
 work, immutable midnight retries, request/day binding, evidence/source binding,
 rehearsal isolation, DB-fake stale/duplicate/recovery behavior, Sydney DST, actual
 renderer CSP presence and the original pipeline's complete step order, quiet
-success and failure reporting. Real cloud write/browser tests, independent review,
-and real DB rollback/concurrency remain unverified. No production activation.
+success and failure reporting. The cloud claim/write/browser tests and independent review now passed in rehearsal;
+real DB rollback/concurrency also passed in an isolated cluster (details below).
+Production activation and production import remain unperformed.
+
+
+## Verified round trip and cutover readiness (2026-10-22)
+
+Fetched and independently checked the remote record at
+`6d5e856b8e071d656f4a3e1fdd7653ccd92c968a`. Request hash still matches the prepared
+request above. Submitted result SHA-256 is
+`cef0be3aa2aea784b4b9d426e84f344ec706f5a796129824fcf52c764520b5b9`.
+Candidate hashes:
+
+- new: `0df833dcafbdd7dc6980af5ddf9bff29ffc89c01de4b716d9412ed4786985022`;
+- past: `6482baed7a1345eb35d68cd30f72dfb5ad30f574aa5e707e2bc42df825a54276`.
+
+The record retains 12 new-gadget and 17 past-gadget actual browser assertions,
+executable harness source and independent reviewer
+`b0dc43c9-19f5-4e80-92ad-79761a670f97` notes confirming a separate rerun. Parent
+also reports successful runtime CSP probes and 13 offline regressions. Local
+verification inspected those retained assertions/harness/notes and the past JS
+repairs (accent detection/normalization, preserved exceptions, duplicate scoring).
+It did not rerun a browser on resource-sensitive Raksasa. Each candidate hash,
+result hash and request identity was independently recomputed and matched.
+
+Calling the actual import handler with this exact submitted record rejected it
+as rehearsal before a connection factory could execute: **zero DB connection
+attempts**, ack remains null. Rehearsal must not be promoted/edited into production.
+Production will receive a fresh daily request from the existing local cron after
+coordinated mode switch and successful publication.
+
+Five real DB integration tests passed in a private disposable PostgreSQL 16
+cluster under /tmp, Unix socket only, 8MB shared buffers, two synthetic source
+rows. They proved commit/marker retry without duplicate update; rollback after
+second-write constraint failure; rollback after stale past-row detection;
+concurrent advisory-lock exclusion and successful retry; legacy-generated-day
+blocking while cloud imports do not block the next assignment. The cluster was
+stopped/deleted immediately. No production PostgreSQL connection or service
+restart, production gadget creation or site publication occurred.
+
+Reproduce deliberately only with resource headroom:
+`python3 tests/run_disposable_postgres.py` (uses local PostgreSQL 16 binaries,
+psycopg2 and private socket access; a restricted sandbox may require approval for
+that socket). Normal `python3 -m unittest discover -s tests -v` runs the 13 offline
+regressions and skips the five integration tests without a disposable DSN.
+
+Activation checklist for parent (not yet executed):
+
+1. Create the daily cloud schedule for **03:00 Australia/Sydney**, using the exact
+   prompt above and published classical-texts environment. Confirm its first run
+   follows a local cloud-mode cron that successfully publishes/enqueues a fresh
+   production request. Keep it paused until this ordering can be guaranteed.
+2. Explicitly confirm schedule creation/readiness before any local activation.
+   Review/merge the staged source branch, preserve existing host config and exact
+   cron, verify no old-version generator/pipeline is running, and update the
+   production checkout safely without disturbing local/unrelated changes.
+3. Set only `GADGET_WORKFLOW = "cloud"` in existing Herodian config.py; keep the
+   01:15 Raksasa cron entry, git pull and all other configuration/steps unchanged.
+   Do not run an extra production pipeline/gadget during rehearsal. The next
+   ordinary cron imports nothing if no production result exists, retains all
+   daily maintenance, publishes normally and queues fresh public work.
+4. Enable the created cloud schedule for its first 03:00 run after that queue.
+   Inspect claim/result and actual browser/review evidence; the following normal
+   cron imports and acknowledges, then builds/publishes and queues the next day.
+   Late results remain pending for subsequent runs. No tight same-night deadline.
+
+Rollback: pause the cloud schedule first and verify its worker/legacy generator
+are stopped. Restore saved config's `GADGET_WORKFLOW = "legacy"`; no cron rewrite
+or code rollback is needed. Inspect production import marker/timestamp before
+any manual legacy run: do not generate again on a Sydney day already imported.
+Keep Git queue/results for inspection; do not force-reset claims or discard an
+uncertain commit/ack. If an import failed but publication succeeded, retain its
+nonzero log and investigate stale source/DB access before retrying. Restoring
+legacy also restores its existing API dependency; it does not repair that API.
+
+Ready for parent schedule creation and coordinated activation approval. Still
+not activated: no merge, production config switch, schedule or production import.
