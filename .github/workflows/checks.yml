@@ -1,0 +1,23 @@
+name: Offline checks
+on:
+  push:
+    branches: [main, ci-checks]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read exact public source commit
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git init -q .
+          git remote add origin https://github.com/solresol/prosodia-catholica.git
+          git fetch --depth=1 origin "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Offline regressions and shell syntax
+        run: |
+          python3 -m unittest discover -s tests -v
+          bash -n run_daily_pipeline.sh
