@@ -17,7 +17,7 @@ FIELDS = {'id','ref','ref_major','ref_minor','greek_text','english_translation',
 
 
 def validate(document):
-    if set(document) != {'schema','provenance','receipts','passages'} or document['schema'] != 1:
+    if set(document) not in ({'schema','provenance','receipts','passages'}, {'schema','provenance','receipts','passages','text_receipts'}) or document['schema'] != 1:
         raise ValueError('Unsupported content schema')
     if set(document["provenance"]) != {"edition","publication","scope"} or any(not isinstance(v,str) or len(v)>1000 for v in document["provenance"].values()):
         raise ValueError("Invalid safe provenance")
@@ -43,6 +43,16 @@ def validate(document):
             raise ValueError("Invalid receipt")
         if datetime.fromisoformat(receipt["day"]).date().isoformat()!=receipt["day"]:
             raise ValueError("Invalid receipt day")
+    texts=document.get('text_receipts',{})
+    if not isinstance(texts,dict):raise ValueError('Invalid text receipts')
+    for day,receipt in texts.items():
+        if datetime.fromisoformat(day).date().isoformat()!=day or set(receipt)!={'request_sha256','result_sha256','review'}:
+            raise ValueError('Invalid text receipt identity')
+        if any(not re.fullmatch(r'[0-9a-f]{64}',receipt[k]) for k in ('request_sha256','result_sha256')):
+            raise ValueError('Invalid text receipt digest')
+        review=receipt['review']
+        if set(review)!={'reviewer','notes'} or any(not isinstance(v,str) or not v.strip() or len(v)>2000 for v in review.values()):
+            raise ValueError('Bounded independent text review required')
     return document
 
 

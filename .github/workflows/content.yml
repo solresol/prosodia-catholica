@@ -1,7 +1,7 @@
 name: Git content and offline build
 on:
   push:
-    branches: [main, git-content]
+    branches: [main, git-content, hosted-deployment]
   pull_request:
   workflow_dispatch:
 permissions:

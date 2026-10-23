@@ -1,0 +1,78 @@
+name: Herodian hosted lifecycle
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: herodian-production-lifecycle
+  cancel-in-progress: false
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -v
+      - run: SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" python tests/offline_build.py --out checked-site
+      - id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  lifecycle:
+    needs: checks
+    if: github.ref == 'refs/heads/main' && vars.HERODIAN_HOSTED_LIFECYCLE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.checks.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Configure temporary repository authentication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKED_SHA: ${{ needs.checks.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git checkout -B main "$CHECKED_SHA"
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python3 - <<'PY'
+          import base64,os
+          header='AUTHORIZATION: basic '+base64.b64encode(('x-access-token:'+os.environ['GH_TOKEN']).encode()).decode()
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write('GIT_CONFIG_COUNT=1\nGIT_CONFIG_KEY_0=http.https://github.com/.extraheader\nGIT_CONFIG_VALUE_0='+header+'\n')
+          PY
+      - name: Reconcile, check resulting SHA, publish and enqueue
+        env:
+          DEPLOY_KEY: ${{ secrets.HERODIAN_DEPLOY_KEY }}
+          TRUSTED_HOSTS: ${{ vars.HERODIAN_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.HERODIAN_DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ vars.HERODIAN_DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/herodian-key"
+          known="$RUNNER_TEMP/herodian-hosts"
+          trap 'rm -f "$key" "$known"' EXIT
+          test -n "$DEPLOY_KEY" && test -n "$TRUSTED_HOSTS"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          printf '%s\n' "$TRUSTED_HOSTS" > "$known"
+          python ci/lifecycle.py --host "$DEPLOY_HOST" --path "$DEPLOY_PATH" --key "$key" --known-hosts "$known"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: publication-${{ github.run_id }}
+          path: publication.json
+          if-no-files-found: ignore
