@@ -41,14 +41,21 @@ class Operations:
 
 def cycle(ops,now):
     """No publication cache: late results and failed publications cannot be skipped."""
+    ops.stage='source gate'
     ops.guard()
+    ops.stage='content reconciliation'
     ops.reconcile()  # Includes content commit/push before handoff acknowledgement.
+    ops.stage='resulting source gate'
     ops.guard()
     sha=ops.sha()
+    ops.stage='resulting SHA checks and build'
     ops.checks(sha)  # Tests and artifact are bound to resulting SHA, not triggering SHA.
     if ops.sha()!=sha:raise RuntimeError('Source changed during checks')
+    ops.stage='SSH publication and checksum verification'
     files=ops.publication(sha)
+    ops.stage='publication receipt'
     ops.receipt({'sha':sha,'day':now.date().isoformat(),'files':files,'published':True})
+    ops.stage='next assignment enqueue'
     ops.enqueue(sha)
     return sha
 
@@ -59,10 +66,11 @@ def main():
     p.add_argument('--site',type=Path,default=ROOT/'site')
     p.add_argument('--receipt',type=Path,default=ROOT/'publication.json')
     a=p.parse_args()
-    try:print('Published checked source '+cycle(Operations(a),datetime.now(ZoneInfo('Australia/Sydney'))))
-    except Exception:
+    ops=Operations(a)
+    try:print('Published checked source '+cycle(ops,datetime.now(ZoneInfo('Australia/Sydney'))))
+    except Exception as error:
         # Captured subprocess/API details can include credentials or host-local context.
-        print('Herodian hosted lifecycle failed; no later stage was claimed successful.',file=sys.stderr)
+        print('Herodian hosted lifecycle failed at '+getattr(ops,'stage','initialization')+' ('+type(error).__name__+'); later stages not claimed successful.',file=sys.stderr)
         raise SystemExit(1)
 
 if __name__=='__main__':main()

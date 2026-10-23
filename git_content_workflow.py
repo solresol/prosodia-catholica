@@ -80,6 +80,17 @@ def publish_content(path):
         raise RuntimeError('Main advanced; confirm reconciliation before acknowledging')
 
 
+def reconcile_content(record,path=DEFAULT,publisher=None):
+    """Caller holds workflow lock through this operation and the queue ack push."""
+    if record is None or record['result'] is None or record['mode']=='rehearsal':return record,'pending'
+    with transaction(path) as document:
+        outcome=apply(document,record)
+    (publisher or publish_content)(path)
+    record=copy.deepcopy(record)
+    record['ack']=digest(record['result'])
+    return record,outcome
+
+
 def main():
     p=argparse.ArgumentParser(__doc__)
     p.add_argument('action',choices=['import-ready','enqueue','recover-content'])
@@ -100,14 +111,7 @@ def main():
             if not args.published_file: raise RuntimeError('Published snapshot required')
             request=prepare(load(args.content),json.loads(args.published_file.read_text()))
             return enqueue(record,request)
-        if record is None or record['result'] is None or record['mode']=='rehearsal': return record,'pending'
-        with transaction(args.content) as document:
-            outcome=apply(document,record)
-        # A crash before/after push is recovered by the receipt and candidate comparison.
-        publish_content(args.content)
-        record=copy.deepcopy(record)
-        record['ack']=digest(record['result'])
-        return record,outcome
+        return reconcile_content(record,args.content)
     with workflow_lock(args.content):
         print(queue.transact(update))
 

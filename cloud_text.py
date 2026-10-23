@@ -56,7 +56,8 @@ def apply(document,result):
         if prior!=receipt:raise RuntimeError('Different text work already accepted for this Sydney day')
         for item,c in zip(req['items'],candidates):
             row=rows[c['id']]
-            if row['greek_text']!=item['original']['greek_text'] or any(row[f]!=c[f] for f in item['fields']):raise RuntimeError('Accepted text subsequently edited')
+            expected={k:(c[k] if k in item['fields'] else item['original'][k]) for k in ORIGINAL}
+            if any(row[k]!=v for k,v in expected.items()):raise RuntimeError('Accepted text subsequently edited')
         return 'already-imported'
     for item in req['items']:
         if {k:rows[item['original']['id']][k] for k in ORIGINAL}!=item['original']:raise RuntimeError('Text changed since assignment')
