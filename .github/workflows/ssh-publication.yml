@@ -1,0 +1,68 @@
+name: Checked SSH publication (prepared)
+on:
+  workflow_dispatch:
+    inputs:
+      checked_run:
+        description: Successful Git content and offline build run ID for current main
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: herodian-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    # Remains disabled until credentials AND complete lifecycle cutover are ready.
+    if: github.ref == 'refs/heads/main' && vars.HERODIAN_SSH_PUBLICATION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify successful checks and exact current main
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.checked_run }}
+        run: |
+          python3 - <<'PY'
+          import json,os,re,subprocess
+          run_id=os.environ['RUN_ID']
+          assert re.fullmatch(r'[0-9]+',run_id)
+          run=json.loads(subprocess.check_output(['gh','api','repos/solresol/prosodia-catholica/actions/runs/'+run_id]))
+          assert run['conclusion']=='success' and run['head_branch']=='main'
+          assert run['path']=='.github/workflows/content.yml'
+          sha=run['head_sha']
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==sha
+          assert subprocess.check_output(['git','ls-remote','origin','refs/heads/main'],text=True).split()[0]==sha
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write('sha='+sha+'\n')
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          name: static-site-${{ steps.gate.outputs.sha }}
+          path: checked-site
+          run-id: ${{ inputs.checked_run }}
+          github-token: ${{ github.token }}
+      - name: Publish checked artifact and verify checksums
+        env:
+          DEPLOY_KEY: ${{ secrets.HERODIAN_DEPLOY_KEY }}
+          TRUSTED_HOSTS: ${{ vars.HERODIAN_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.HERODIAN_DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ vars.HERODIAN_DEPLOY_PATH }}
+          SHA: ${{ steps.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/herodian-key"
+          known="$RUNNER_TEMP/herodian-hosts"
+          trap 'rm -f "$key" "$known"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          printf '%s\n' "$TRUSTED_HOSTS" > "$known"
+          current=$(git ls-remote origin refs/heads/main | cut -f1)
+          python ci/ssh_publish.py --sha "$SHA" --checked-sha "$SHA" --current-sha "$current" --conclusion success --site checked-site --host "$DEPLOY_HOST" --path "$DEPLOY_PATH" --key "$key" --known-hosts "$known" --receipt publication.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: publication-${{ steps.gate.outputs.sha }}
+          path: publication.json
