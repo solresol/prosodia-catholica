@@ -65,3 +65,17 @@ class LifecycleTests(unittest.TestCase):
   fallback=(Path(__file__).resolve().parents[1]/'run_git_pipeline.sh').read_text()
   self.assertNotIn('generate_content.py',fallback)
   self.assertNotIn('gadgetize_lines.py',fallback)
+
+class AuthenticationLogTests(unittest.TestCase):
+ def test_git_config_failure_does_not_log_encoded_token(self):
+  import base64,os,subprocess,tempfile
+  from unittest.mock import patch
+  workflow=(Path(__file__).resolve().parents[1]/'.github/workflows/lifecycle.yml').read_text()
+  start=workflow.index('          import base64,os,subprocess')
+  end=workflow.index('\n          PY',start)
+  code='\n'.join(line[10:] for line in workflow[start:end].splitlines())
+  token='a-test-token-that-must-not-leak'
+  with patch.dict(os.environ,GH_TOKEN=token),patch.object(subprocess,'run',return_value=subprocess.CompletedProcess([],1)),self.assertRaises(SystemExit) as failed:
+   exec(code,{})
+  self.assertEqual(str(failed.exception),'Temporary Git authentication setup failed')
+  self.assertNotIn(token,str(failed.exception));self.assertNotIn(base64.b64encode(('x-access-token:'+token).encode()).decode(),str(failed.exception))

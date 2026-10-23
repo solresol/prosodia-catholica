@@ -52,7 +52,8 @@ jobs:
           python3 - <<'PY'
           import base64,os,subprocess
           header='AUTHORIZATION: basic '+base64.b64encode(('x-access-token:'+os.environ['GH_TOKEN']).encode()).decode()
-          subprocess.run(['git','config','--global','http.https://github.com/.extraheader',header],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+          configured=subprocess.run(['git','config','--global','http.https://github.com/.extraheader',header],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+          if configured.returncode:raise SystemExit('Temporary Git authentication setup failed')
           PY
       - name: Reconcile, check resulting SHA, publish and enqueue
         env:
