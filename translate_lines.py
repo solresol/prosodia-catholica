@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 
 from openai import OpenAI
 
-from db import get_connection
 from openai_utils import load_openai_api_key
 
 
@@ -87,6 +86,7 @@ def main() -> None:
     api_key = load_openai_api_key()
     client = OpenAI(api_key=api_key)
 
+    from db import get_connection
     conn = get_connection()
     total_tokens = 0
     translated = 0

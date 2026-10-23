@@ -13,3 +13,6 @@ pipeline.log
 
 # Local copies of source data
 HerodianCathPros.txt
+
+# Local content transaction locks
+content/*.lock

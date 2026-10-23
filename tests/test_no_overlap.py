@@ -45,7 +45,7 @@ class NoOverlapTests(unittest.TestCase):
                 retired=('index.html','coverage.html','reuse_predictors_words.html','reuse_predictors_ngrams_2_3.html')
                 for name in retired: (analysis/name).write_text('old overlap output')
                 (analysis/'unrelated.txt').write_text('preserve')
-                with patch.object(sys,'argv',['generate_site.py','--out',str(out)]), contextlib.redirect_stdout(io.StringIO()):
+                with patch.object(sys,'argv',['generate_site.py','--database','--out',str(out)]), contextlib.redirect_stdout(io.StringIO()):
                     site.main()
                 self.assertEqual(len(queries),3)
                 self.assertTrue(conn.closed)

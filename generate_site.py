@@ -10,7 +10,11 @@ from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 
-from db import get_connection
+
+
+def build_time():
+    epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    return datetime.fromtimestamp(int(epoch), timezone.utc) if epoch else datetime.now(timezone.utc)
 
 
 def _site_title(default: str) -> str:
@@ -355,7 +359,7 @@ def gadget_srcdoc(*, html: str | None, css: str | None, js: str | None) -> str:
 
 
 def render_shell(*, title: str, body_html: str) -> str:
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    generated_at = build_time().strftime("%Y-%m-%d %H:%M UTC")
     contact_name = _site_contact_name("")
     contact_emails = _site_contact_emails(
         ["gregb@ifost.org.au", "greg.baker@mq.edu.au", "greg.baker@anu.edu.au"]
@@ -676,7 +680,7 @@ def render_about_lentz(*, site_title: str) -> str:
 
 
 def _render_progress_page(*, site_title: str, progress_data: dict) -> str:
-    now_utc = _to_utc(progress_data.get("now_utc")) or datetime.now(timezone.utc)
+    now_utc = _to_utc(progress_data.get("now_utc")) or build_time()
     runs_per_day = max(1, int(progress_data.get("runs_per_day") or 1))
 
     total_all = max(0, int(progress_data.get("total_all") or 0))
@@ -925,6 +929,8 @@ def _render_progress_page(*, site_title: str, progress_data: dict) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate static site from cathpros_lines.")
     parser.add_argument("--out", default="site", help="Output directory (default: site)")
+    parser.add_argument("--content", type=Path, default=Path(__file__).parent / "content/passages.json")
+    parser.add_argument("--database", action="store_true", help="Explicit rollback renderer; requires legacy DB configuration")
     args = parser.parse_args()
 
     out_dir = Path(args.out)
@@ -932,64 +938,69 @@ def main() -> None:
     passages_dir = out_dir / "passages"
     passages_dir.mkdir(parents=True, exist_ok=True)
 
-    conn = get_connection(dict_cursor=True)
-    progress_row = None
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                  id,
-                  ref,
-                  ref_major,
-                  ref_minor,
-                  greek_text,
-                  english_translation,
-                  summary,
-                  gadget_html,
-                  gadget_css,
-                  gadget_js,
-                  translated_at
-                FROM cathpros_lines
-                WHERE ref NOT IN ('E')
-                ORDER BY ref_major NULLS LAST, ref_minor NULLS LAST, ref
-                """
-            )
-            rows = cur.fetchall()
+    if args.database:
+        from db import get_connection
+        conn = get_connection(dict_cursor=True)
+        progress_row = None
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      id,
+                      ref,
+                      ref_major,
+                      ref_minor,
+                      greek_text,
+                      english_translation,
+                      summary,
+                      gadget_html,
+                      gadget_css,
+                      gadget_js,
+                      translated_at
+                    FROM cathpros_lines
+                    WHERE ref NOT IN ('E')
+                    ORDER BY ref_major NULLS LAST, ref_minor NULLS LAST, ref
+                    """
+                )
+                rows = cur.fetchall()
 
-            cur.execute(
-                """
-                SELECT
-                  COUNT(*) FILTER (WHERE ref NOT IN ('E')) AS total,
-                  COUNT(*) FILTER (WHERE english_translation IS NOT NULL AND ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0) AS translated,
-                  COUNT(*) FILTER (WHERE summary IS NOT NULL AND ref NOT IN ('E')) AS summarized
-                FROM cathpros_lines
-                """
-            )
-            stats_row = cur.fetchone()
+                cur.execute(
+                    """
+                    SELECT
+                      COUNT(*) FILTER (WHERE ref NOT IN ('E')) AS total,
+                      COUNT(*) FILTER (WHERE english_translation IS NOT NULL AND ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0) AS translated,
+                      COUNT(*) FILTER (WHERE summary IS NOT NULL AND ref NOT IN ('E')) AS summarized
+                    FROM cathpros_lines
+                    """
+                )
+                stats_row = cur.fetchone()
 
-            cur.execute(
-                """
-                SELECT
-                  COUNT(*) AS total_all,
-                  COUNT(*) FILTER (WHERE ref NOT IN ('E')) AS total_non_e,
-                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0) AS total_translatable,
-                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND english_translation IS NOT NULL) AS translated_done,
-                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND summary IS NOT NULL) AS summarized_done,
-                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND gadget_html IS NOT NULL) AS gadget_done,
-                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND english_translation IS NOT NULL AND gadget_html IS NULL) AS gadget_ready_pending,
-                  COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND english_translation IS NULL) AS gadget_blocked_translation,
-                  MAX(imported_at) AS latest_imported_at,
-                  MAX(translated_at) AS latest_translated_at,
-                  MAX(summarized_at) AS latest_summarized_at,
-                  MAX(gadget_generated_at) AS latest_gadget_generated_at
-                FROM cathpros_lines
-                """
-            )
-            progress_row = cur.fetchone()
+                cur.execute(
+                    """
+                    SELECT
+                      COUNT(*) AS total_all,
+                      COUNT(*) FILTER (WHERE ref NOT IN ('E')) AS total_non_e,
+                      COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0) AS total_translatable,
+                      COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND english_translation IS NOT NULL) AS translated_done,
+                      COUNT(*) FILTER (WHERE ref NOT IN ('E') AND summary IS NOT NULL) AS summarized_done,
+                      COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND gadget_html IS NOT NULL) AS gadget_done,
+                      COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND english_translation IS NOT NULL AND gadget_html IS NULL) AS gadget_ready_pending,
+                      COUNT(*) FILTER (WHERE ref NOT IN ('E') AND COALESCE(ref_major, 1) <> 0 AND english_translation IS NULL) AS gadget_blocked_translation,
+                      MAX(imported_at) AS latest_imported_at,
+                      MAX(translated_at) AS latest_translated_at,
+                      MAX(summarized_at) AS latest_summarized_at,
+                      MAX(gadget_generated_at) AS latest_gadget_generated_at
+                    FROM cathpros_lines
+                    """
+                )
+                progress_row = cur.fetchone()
 
-    finally:
-        conn.close()
+        finally:
+            conn.close()
+    else:
+        from content_store import load, rendering_inputs
+        rows, stats_row, progress_row = rendering_inputs(load(args.content))
 
     lines = []
     for r in rows:
@@ -1031,7 +1042,7 @@ def main() -> None:
     gadget_limit = max(0, _env_or_config_int("GADGET_LIMIT", "GADGET_LIMIT", 1))
 
     progress_data = {
-        "now_utc": datetime.now(timezone.utc),
+        "now_utc": build_time(),
         "runs_per_day": runs_per_day,
         "translation_limit": translation_limit,
         "summary_limit": summary_limit,
@@ -1075,6 +1086,10 @@ def main() -> None:
         + "\n",
         encoding="utf-8",
     )
+
+    if not args.database:
+        legacy = args.content.parent / "legacy-lines.json"
+        (out_dir / "lines.json").write_bytes(legacy.read_bytes())
 
     site_title = _site_title("Prosodia Catholica (Herodian)")
     (out_dir / "index.html").write_text(

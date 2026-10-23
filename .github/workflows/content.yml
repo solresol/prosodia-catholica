@@ -1,0 +1,22 @@
+name: Git content and offline build
+on:
+  push:
+    branches: [main, git-content]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -v
+      - run: SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" python tests/offline_build.py --out site
+      - uses: actions/upload-artifact@v4
+        with:
+          name: static-site-${{ github.sha }}
+          path: site
