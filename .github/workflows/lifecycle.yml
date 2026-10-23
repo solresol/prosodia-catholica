@@ -45,14 +45,14 @@ jobs:
           CHECKED_SHA: ${{ needs.checks.outputs.sha }}
         run: |
           set -euo pipefail
+          umask 077
           git checkout -B main "$CHECKED_SHA"
           git config --global user.name 'github-actions[bot]'
           git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
           python3 - <<'PY'
-          import base64,os
+          import base64,os,subprocess
           header='AUTHORIZATION: basic '+base64.b64encode(('x-access-token:'+os.environ['GH_TOKEN']).encode()).decode()
-          with open(os.environ['GITHUB_ENV'],'a') as f:
-              f.write('GIT_CONFIG_COUNT=1\nGIT_CONFIG_KEY_0=http.https://github.com/.extraheader\nGIT_CONFIG_VALUE_0='+header+'\n')
+          subprocess.run(['git','config','--global','http.https://github.com/.extraheader',header],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
           PY
       - name: Reconcile, check resulting SHA, publish and enqueue
         env:
@@ -70,6 +70,9 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > "$key"
           printf '%s\n' "$TRUSTED_HOSTS" > "$known"
           python ci/lifecycle.py --host "$DEPLOY_HOST" --path "$DEPLOY_PATH" --key "$key" --known-hosts "$known"
+      - name: Remove temporary repository authentication
+        if: always()
+        run: git config --global --unset-all http.https://github.com/.extraheader || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
