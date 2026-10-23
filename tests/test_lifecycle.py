@@ -62,3 +62,6 @@ class LifecycleTests(unittest.TestCase):
  def test_no_model_stage_is_present(self):
   source=(Path(__file__).resolve().parents[1]/'ci/lifecycle.py').read_text()
   self.assertNotIn('OPENAI',source);self.assertNotIn('generate_content',source);self.assertFalse(hasattr(Ops,'maintenance'))
+  fallback=(Path(__file__).resolve().parents[1]/'run_git_pipeline.sh').read_text()
+  self.assertNotIn('generate_content.py',fallback)
+  self.assertNotIn('gadgetize_lines.py',fallback)
