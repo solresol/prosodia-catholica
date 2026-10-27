@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 mkdir -p logs
 exec 9>logs/pipeline.lock
 flock -n 9 || exit 0
-runlog=$(mktemp logs/git-run.XXXXXXXX.log)
+runlog=$(mktemp logs/git-run.XXXXXXXX)
 finish() {
  status=$?
  trap - EXIT
@@ -23,7 +23,8 @@ pipeline() {
  # Existing host-local configuration and transport; never emitted to hosted CI.
  deploy_host=$(python3 -c 'import config; print(config.DEPLOY_HOST)')
  deploy_path=$(python3 -c 'import config; print(config.DEPLOY_PATH)')
- rsync -az --delete site/ "$deploy_host:$deploy_path/"
+ rsync -az --delete --chmod=D755,F644 site/ "$deploy_host:$deploy_path/"
+ python3 -c 'from ci.ssh_publish import manifest, verify_publication; verify_publication("site", manifest("site"))'
  uv run git_content_workflow.py enqueue --published-file site/passages.json
 }
 pipeline >"$runlog" 2>&1

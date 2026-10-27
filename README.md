@@ -50,7 +50,8 @@ This repo includes a small PostgreSQL-backed pipeline to:
    - `uv run generate_site.py`
 
 7. Deploy:
-   - `rsync -az --delete site/ merah:/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs/`
+   - `rsync -az --delete --chmod=D755,F644 site/ merah:/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs/`
+   - `python3 -c 'from ci.ssh_publish import manifest, verify_publication; verify_publication("site", manifest("site"))'`
 
 The site is generated as:
 - `site/index.html` (index)

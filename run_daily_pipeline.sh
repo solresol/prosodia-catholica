@@ -64,7 +64,8 @@ echo "Step 5: deploy site via rsync..." | tee -a "$LOGFILE"
 DEPLOY_HOST="$(python3 -c 'import config; print(getattr(config, "DEPLOY_HOST", "merah"))')"
 DEPLOY_PATH="$(python3 -c 'import config; print(getattr(config, "DEPLOY_PATH", "/var/www/vhosts/prosodia-catholica.symmachus.org/htdocs"))')"
 
-rsync -az --delete site/ "${DEPLOY_HOST}:${DEPLOY_PATH}/" 2>&1 | tee -a "$LOGFILE"
+rsync -az --delete --chmod=D755,F644 site/ "${DEPLOY_HOST}:${DEPLOY_PATH}/" 2>&1 | tee -a "$LOGFILE"
+python3 -c 'from ci.ssh_publish import manifest, verify_publication; verify_publication("site", manifest("site"))' 2>&1 | tee -a "$LOGFILE"
 
 if [[ "$GADGET_WORKFLOW" == cloud ]]; then
   # rsync succeeded: this exact snapshot is now public. Queue only these fields.
@@ -81,7 +82,7 @@ return "$GADGET_STATUS"
 }
 
 # Keep useful per-run failure output without cron mail on success.
-RUNLOG=$(mktemp logs/cron-run.XXXXXXXX.log)
+RUNLOG=$(mktemp logs/cron-run.XXXXXXXX)
 exec 8>&2
 finish() {
   status=$?

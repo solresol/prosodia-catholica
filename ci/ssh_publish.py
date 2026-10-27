@@ -9,6 +9,15 @@ import json
 from pathlib import Path
 import re
 import subprocess
+from urllib.error import URLError
+from urllib.request import Request, urlopen
+
+
+PUBLIC_SITE_URL = 'https://prosodia-catholica.symmachus.org'
+PUBLIC_MODES = '--chmod=D755,F644'
+CLOUDFLARE_BEACON = re.compile(
+    rb'<script\b[^>]*\bsrc="https://static\.cloudflareinsights\.com/beacon\.min\.js/[^"\s]+"[^>]*></script>\n?'
+)
 
 
 def manifest(root):
@@ -29,6 +38,31 @@ def verified_gate(sha,checked_sha,current_sha,conclusion):
         raise RuntimeError('Deployment requires successful checks for exact current main SHA')
 
 
+def verify_publication(root, expected):
+    """Check representative public routes against this exact built artifact."""
+    passages = sorted(name for name in expected if name.startswith('passages/') and name.endswith('.html'))
+    routes = ['index.html', 'analysis/progress.html', 'passages.json']
+    if not passages or not set(routes) <= expected.keys():
+        raise ValueError('Public HTTPS check requires index, progress, data and passage pages')
+    routes.append(passages[0])
+    for relative in routes:
+        route = '' if relative == 'index.html' else relative
+        url = f'{PUBLIC_SITE_URL}/{route}?publication={expected[relative]}'
+        request = Request(url, headers={'Cache-Control': 'no-cache', 'User-Agent': 'Prosodia-Catholica-deployment-check'})
+        try:
+            with urlopen(request, timeout=30) as response:
+                if response.status != 200 or response.geturl() != url:
+                    raise RuntimeError(f'Public HTTPS check failed for {relative}: unexpected response')
+                # Allow bounded CDN instrumentation, while detecting extra content.
+                body = response.read((Path(root) / relative).stat().st_size + 4097)
+        except (URLError, TimeoutError) as error:
+            raise RuntimeError(f'Public HTTPS check failed for {relative}') from error
+        if relative.endswith('.html'):
+            body = CLOUDFLARE_BEACON.sub(b'', body)
+        if hashlib.sha256(body).hexdigest() != expected[relative]:
+            raise RuntimeError(f'Public HTTPS content mismatch for {relative}')
+
+
 def publish(root,host,path,key,known_hosts):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]+',host):raise ValueError('Invalid host')
     if not re.fullmatch(r'/[A-Za-z0-9_./-]+',path) or '..' in Path(path).parts:raise ValueError('Invalid destination')
@@ -40,9 +74,10 @@ def publish(root,host,path,key,known_hosts):
         raise ValueError('Unsafe temporary SSH path')
     transport=f'ssh -i {key} -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile={known_hosts}'
     destination=f'herodian@{host}:{path.rstrip("/")}/'
-    subprocess.run(['rsync','-az','--delete','-e',transport,str(Path(root))+'/',destination],check=True,capture_output=True)
-    checked=subprocess.run(['rsync','-aznc','--delete','--itemize-changes','-e',transport,str(Path(root))+'/',destination],check=True,capture_output=True,text=True)
+    subprocess.run(['rsync','-az','--delete',PUBLIC_MODES,'-e',transport,str(Path(root))+'/',destination],check=True,capture_output=True)
+    checked=subprocess.run(['rsync','-aznc','--delete',PUBLIC_MODES,'--itemize-changes','-e',transport,str(Path(root))+'/',destination],check=True,capture_output=True,text=True)
     if checked.stdout.strip():raise RuntimeError('Published artifact checksum mismatch')
+    verify_publication(root, expected)
     return expected
 
 

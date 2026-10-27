@@ -19,9 +19,10 @@ assertions/harness/review, exact stale snapshots and content receipts. It commit
 pushes before acknowledgement; a failed ack recovers idempotently. Acknowledgement
 means stored, not published. No publication cache exists: publication retries use
 current content and late results arriving during publication are imported next poll.
-A receipt is written only after complete deployed checksum parity, then retained as
-a workflow artifact even if enqueue fails. A failed enqueue retries after verified
-publication. No later remote handoff HEAD is marked consumed. Repeated builds use
+A receipt is written only after complete deployed checksum parity and public HTTPS
+verification, then retained as a workflow artifact even if enqueue fails. A failed
+enqueue retries after verified publication. No later remote handoff HEAD is marked
+consumed. Repeated builds use
 SOURCE_DATE_EPOCH from the exact content commit.
 
 ## AI belongs in Codex Cloud
@@ -60,6 +61,16 @@ Use only the explicitly approved repository deployment key and pinned host-key
 variable. Private key material is written to a mode-600 temporary file and removed
 on exit. The destination user is fixed to `herodian`; only the existing site's host
 and destination variables are used. No database/network/runner privileges change.
+
+Publication explicitly sets public directories to `755` and files to `644`, including
+the destination root, regardless of the runner's private `umask 077`. The checksum
+comparison uses the same permission mapping. Before a publication receipt or next
+assignment is written, public HTTPS requests check the homepage, progress page,
+passage data and one passage page. Each must return HTTP 200 without a redirect and
+match the built file's SHA-256 after removing only Cloudflare's injected analytics
+beacon from HTML. JSON is compared byte-for-byte. Digest query parameters avoid
+stale cached copies; an unreadable site or stale response fails the deployment.
+Both local fallback scripts use these permissions and public checks too.
 
 Keep cron until independent review, exact-commit checks and an actual complete hosted
 production cycle pass. Test during a quiet interval with no local run; both local and

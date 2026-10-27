@@ -51,7 +51,7 @@ def cycle(ops,now):
     ops.stage='resulting SHA checks and build'
     ops.checks(sha)  # Tests and artifact are bound to resulting SHA, not triggering SHA.
     if ops.sha()!=sha:raise RuntimeError('Source changed during checks')
-    ops.stage='SSH publication and checksum verification'
+    ops.stage='SSH publication, checksum and public HTTPS verification'
     files=ops.publication(sha)
     ops.stage='publication receipt'
     ops.receipt({'sha':sha,'day':now.date().isoformat(),'files':files,'published':True})
