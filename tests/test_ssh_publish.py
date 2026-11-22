@@ -2,12 +2,14 @@ import importlib.util
 import io
 from pathlib import Path
 import shutil
+import socket
+import ssl
 import stat
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 spec=importlib.util.spec_from_file_location('publisher',Path(__file__).resolve().parents[1]/'ci/ssh_publish.py')
 p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
 class PublicationTests(unittest.TestCase):
@@ -68,6 +70,51 @@ class PublicationTests(unittest.TestCase):
      p.publish(root,'example.invalid','/site',key,known)
 
 
+class SubprocessDiagnosticTests(unittest.TestCase):
+    def test_recognized_stderr_produces_only_a_fixed_diagnostic(self):
+        private_url = 'https://deploy:secret-token@internal.invalid/private'
+        cases = (
+            (255, b'ssh: Could not resolve hostname private-host: Name or service not known',
+             'DNS lookup failed'),
+            (128, f"fatal: unable to access '{private_url}': Could not resolve host: internal.invalid",
+             'DNS lookup failed'),
+            (255, 'ssh: connect to host private-host port 22: Connection timed out',
+             'connection or transfer timed out'),
+            (30, 'rsync error: timeout in data send/receive (code 30) at private.c(45)',
+             'connection or transfer timed out'),
+            (255, 'Host key verification failed.', 'SSH host-key verification failed'),
+            (255, 'deploy@private-host: Permission denied (publickey,password).',
+             'authentication failed'),
+            (255, 'Load key "/runner/private/key": error in libcrypto',
+             'SSH identity could not be loaded'),
+            (23, 'rsync: [receiver] mkstemp "/private/file" failed: Permission denied (13)',
+             'remote destination permission denied'),
+            (23, 'rsync: [sender] opendir "/private/file" failed: Permission denied (13)',
+             'rsync filesystem permission denied'),
+            (23, 'ERROR: private-file failed verification -- update discarded.',
+             'rsync file verification failed'),
+        )
+        for code, stderr, expected in cases:
+            with self.subTest(expected=expected, code=code):
+                injected = '\n::error::secret-token\x1b[31m\rspoofed line'
+                stderr += injected.encode() if isinstance(stderr, bytes) else injected
+                failure = subprocess.CalledProcessError(code, ['rsync', private_url],
+                                                        output=private_url, stderr=stderr)
+                self.assertEqual(p.subprocess_diagnostic(failure), f'exit code {code}: {expected}')
+
+    def test_unrecognized_control_bearing_and_oversized_stderr_is_omitted(self):
+        for stderr in (
+            None,
+            b'deploy-key=secret\n\x1b[31mHost key verification failed.\r',
+            'x' * 8192 + '\nHost key verification failed.',
+        ):
+            with self.subTest(stderr_type=type(stderr).__name__):
+                failure = subprocess.CalledProcessError(12, ['rsync', 'secret-arg'],
+                                                        output='authentication failed', stderr=stderr)
+                self.assertEqual(p.subprocess_diagnostic(failure),
+                                 'exit code 12: no recognized stderr diagnostic')
+
+
 class PublicResponse(io.BytesIO):
  def __init__(self,body,url,status=200):super().__init__(body);self.url=url;self.status=status
  def geturl(self):return self.url
@@ -100,6 +147,23 @@ class PublicHTTPSTests(unittest.TestCase):
    with self.subTest(error=type(error).__name__),patch.object(p,'urlopen',side_effect=error):
     with self.assertRaisesRegex(RuntimeError,'Public HTTPS check failed for index.html'):
      p.verify_publication(self.root,self.expected)
+
+ def test_https_errors_report_only_status_or_known_transport_failure(self):
+  private_url = 'https://deploy:secret-token@internal.invalid/private'
+  cases = (
+   (HTTPError(private_url, 403, '\n::error::secret-token', None, None), 'HTTP 403'),
+   (URLError(socket.gaierror(-2, private_url)), 'DNS lookup failed'),
+   (URLError(TimeoutError(private_url)), 'request timed out'),
+   (URLError(ssl.SSLCertVerificationError(private_url)), 'TLS certificate verification failed'),
+   (URLError(private_url), 'request failed'),
+  )
+  for error, expected in cases:
+   with self.subTest(expected=expected), patch.object(p, 'urlopen', side_effect=error):
+    with self.assertRaises(p.PublicationError) as failed:
+     p.verify_publication(self.root, self.expected)
+    self.assertEqual(failed.exception.stage, 'public HTTPS verification')
+    self.assertEqual(str(failed.exception), f'Public HTTPS check failed for index.html: {expected}')
+    self.assertTrue(failed.exception.__suppress_context__)
 
  def test_http_200_with_stale_or_extra_content_fails(self):
   for body in (b'stale page',(self.root/'index.html').read_bytes()+b'extra'):

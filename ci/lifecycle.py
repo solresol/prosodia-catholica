@@ -9,11 +9,13 @@ import sys
 from zoneinfo import ZoneInfo
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from ci.ssh_publish import publish,verified_gate
+from ci.ssh_publish import EXACT_MAIN, SSH_PUBLISH, PublicationError, publish, subprocess_diagnostic, verified_gate
 
 
 def command(*args,env=None):
-    return subprocess.check_output(list(args),cwd=ROOT,env=env,text=True,stderr=subprocess.STDOUT).strip()
+    return subprocess.check_output(
+        list(args), cwd=ROOT, env=env, text=True, errors='replace', stderr=subprocess.PIPE
+    ).strip()
 
 
 class Operations:
@@ -30,6 +32,7 @@ class Operations:
         command(sys.executable,'tests/offline_build.py','--out',str(self.args.site),env=env)
     def publication(self,sha):
         verified_gate(sha,sha,self.current(),'success')
+        self.stage=SSH_PUBLISH
         return publish(self.args.site,self.args.host,self.args.path,self.args.key,self.args.known_hosts)
     def receipt(self,record):
         self.args.receipt.parent.mkdir(parents=True,exist_ok=True)
@@ -50,8 +53,8 @@ def cycle(ops,now):
     sha=ops.sha()
     ops.stage='resulting SHA checks and build'
     ops.checks(sha)  # Tests and artifact are bound to resulting SHA, not triggering SHA.
-    if ops.sha()!=sha:raise RuntimeError('Source changed during checks')
-    ops.stage='SSH publication, checksum and public HTTPS verification'
+    ops.stage=EXACT_MAIN
+    if ops.sha()!=sha:raise PublicationError(EXACT_MAIN, 'Source changed during checks')
     files=ops.publication(sha)
     ops.stage='publication receipt'
     ops.receipt({'sha':sha,'day':now.date().isoformat(),'files':files,'published':True})
@@ -69,8 +72,15 @@ def main():
     ops=Operations(a)
     try:print('Published checked source '+cycle(ops,datetime.now(ZoneInfo('Australia/Sydney'))))
     except Exception as error:
-        # Captured subprocess/API details can include credentials or host-local context.
-        print('Herodian hosted lifecycle failed at '+getattr(ops,'stage','initialization')+' ('+type(error).__name__+'); later stages not claimed successful.',file=sys.stderr)
-        raise SystemExit(1)
+        stage = getattr(ops, 'stage', 'initialization')
+        if isinstance(error, PublicationError):
+            stage, detail = error.stage, str(error)
+        elif isinstance(error, subprocess.CalledProcessError):
+            detail = subprocess_diagnostic(error)
+        else:
+            detail = type(error).__name__
+        print(f'Herodian hosted lifecycle failed at {stage} ({detail}); later stages not claimed successful.',
+              file=sys.stderr)
+        raise SystemExit(1) from None
 
 if __name__=='__main__':main()

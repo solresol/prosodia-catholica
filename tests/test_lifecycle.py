@@ -1,8 +1,16 @@
+from contextlib import redirect_stderr
 from datetime import datetime
+import io
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
+
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+from ci import lifecycle, ssh_publish
 from ci.lifecycle import cycle
 
 class Ops:
@@ -79,3 +87,74 @@ class AuthenticationLogTests(unittest.TestCase):
    exec(code,{})
   self.assertEqual(str(failed.exception),'Temporary Git authentication setup failed')
   self.assertNotIn(token,str(failed.exception));self.assertNotIn(base64.b64encode(('x-access-token:'+token).encode()).decode(),str(failed.exception))
+
+
+class PublicationLogTests(unittest.TestCase):
+    def test_failure_stages_report_safe_diagnostics_and_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            site = root / 'site'
+            for name in ('index.html', 'passages.json', 'lines.json',
+                         'analysis/progress.html', 'passages/1.1.html'):
+                file = site / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text('public test content')
+            key, known = root / 'private-key', root / 'known-hosts'
+            key.touch()
+            known.touch()
+            argv = ['lifecycle.py', '--site', str(site), '--host', 'private.invalid',
+                    '--path', '/private/deploy', '--key', str(key), '--known-hosts', str(known)]
+            self.check_failure_cases(argv)
+
+    def check_failure_cases(self, argv):
+        sha = 'a' * 40
+        unsafe = 'https://deploy:secret-token@private.invalid/::error::'
+        success = subprocess.CompletedProcess([], 0, stdout='')
+        changes = subprocess.CompletedProcess([], 0, stdout=f'>fcs {unsafe}\n')
+        auth = subprocess.CalledProcessError(
+            255, ['rsync', unsafe], output=f'{unsafe}\x1b\r\n',
+            stderr=f'deploy@private.invalid: Permission denied (publickey).\n::error::{unsafe}'
+        )
+        dns = subprocess.CalledProcessError(
+            128, ['git', unsafe], stderr=f"fatal: unable to access '{unsafe}': Could not resolve host: private.invalid"
+        )
+        denied = HTTPError(unsafe, 403, '\n::error::secret-token\x1b', None, None)
+        cases = (
+            ('exact-main verification', 'Deployment requires successful checks for exact current main SHA',
+             'b' * 40, [], 0),
+            ('exact-main verification', 'exit code 128: DNS lookup failed', dns, [], 0),
+            ('SSH/rsync publish', 'exit code 255: authentication failed', sha, [auth], 0),
+            ('rsync dry-run checksum', 'exit code 255: authentication failed', sha, [success, auth], 0),
+            ('rsync dry-run checksum', 'Published artifact checksum mismatch (rsync reported changes)',
+             sha, [success, changes], 0),
+            ('public HTTPS verification', 'Public HTTPS check failed for index.html: HTTP 403',
+             sha, [success, success], 1),
+        )
+        for stage, detail, current, results, http_calls in cases:
+            with self.subTest(stage=stage, detail=detail):
+                log = io.StringIO()
+                current_values = [current]
+                with (
+                    patch.object(sys, 'argv', argv),
+                    patch.object(lifecycle.Operations, 'guard'),
+                    patch.object(lifecycle.Operations, 'reconcile'),
+                    patch.object(lifecycle.Operations, 'checks'),
+                    patch.object(lifecycle.Operations, 'sha', return_value=sha),
+                    patch.object(lifecycle.Operations, 'current', side_effect=current_values),
+                    patch.object(lifecycle.Operations, 'receipt') as receipt,
+                    patch.object(lifecycle.Operations, 'enqueue') as enqueue,
+                    patch.object(ssh_publish.subprocess, 'run', side_effect=results) as rsync,
+                    patch.object(ssh_publish, 'urlopen', side_effect=denied) as request,
+                    redirect_stderr(log),
+                    self.assertRaises(SystemExit) as failed,
+                ):
+                    lifecycle.main()
+                self.assertEqual(failed.exception.code, 1)
+                self.assertEqual(
+                    log.getvalue(),
+                    f'Herodian hosted lifecycle failed at {stage} ({detail}); later stages not claimed successful.\n',
+                )
+                self.assertEqual(rsync.call_count, len(results))
+                self.assertEqual(request.call_count, http_calls)
+                receipt.assert_not_called()
+                enqueue.assert_not_called()
